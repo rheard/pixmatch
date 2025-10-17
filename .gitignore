@@ -1,0 +1,9 @@
+.vs/
+.idea/
+x64/
+build/
+dist/
+*.egg-info/
+*.log
+*.pyd
+*.pyproj

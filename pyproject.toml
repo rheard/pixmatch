@@ -1,0 +1,118 @@
+[build-system]
+requires = [
+    "setuptools",
+]
+
+[project]
+name = "pixmatch"
+version = "0.0.1"
+#dynamic = ["license"]
+authors = [
+  { name="Ryan Heard", email="ryanwheard@gmail.com" },
+]
+description = "A modern VisiPics replacement."
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+keywords = [""]
+dependencies = [
+    "Pillow",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6"]
+
+[project.urls]
+Repository = "https://github.com/rheard/pixmatch"
+
+[tool.ruff]
+line-length = 120
+extend-exclude=["twosquares-stubs"]
+
+[tool.ruff.lint]
+preview = true
+extend-select = [
+    "A",      # flake8-builtins
+    "ANN",    # flake8-annotations
+    "ARG",    # flake8-unused-arguments
+    "B",      # flake8-bugbear
+    "BLE",    # flake8-blind-except
+    "C4",     # flake8-comprehensions
+    "COM",    # flake8-commas
+    "DOC",    # lint.pydoclint
+    "D",      # lint.pydocstyle
+    "D213",   # Require multi-line docstring summary should start on second line, which is not Google convention
+    "E", "W", # pycodestyle
+    # "ERA",    # eradicate    TODO: I'd like to enable this. Problem is, see the wishful thinking tests in test_basic
+    "F",      # Pyflakes
+    "FBT",    # flake8-boolean-trap
+    "FLY",    # flynt
+    "FURB",   # refurb
+    "G",      # flake8-logging-format
+    "I",      # isort
+    "ICN",    # flake8-import-conventions
+    "ISC",    # flake8-implicit-str-concat
+    "LOG",    # flake8-logging
+    "NPY",    # Numpy-specific rules
+    "PD",     # pandas-vet
+    "PERF",   # Perflint
+    "PIE",    # flake8-pie
+    "PLC",    # Pylint
+    "PT",     # flake8-pytest-style
+    "PTH",    # flake8-use-pathlib
+    "PYI",    # flake8-pyi
+    "RET",    # flake8-return
+    "RSE",    # flake8-raise
+    "RUF",    # Ruff-specific rules
+    "SIM",    # flake8-simplify
+    "SLOT",   # flake8-slots
+    "T20",    # flake8-print
+    "TC",     # flake8-type-checking
+    "TRY",    # tryceratops
+    "UP",     # pyupgrade
+    "YTT",    # flake8-2020
+]
+ignore=[
+    "ANN201",  # Missing return type
+    "D100",    # Missing docstring in public module
+    "D104",    # Missing docstring in public package
+    "D105",    # Missing docstring in magic method
+    "D202",    # Blank line after function docstring
+    "D212",    # Multi-line docstring summary should start at the first line
+    "D415",    # Closing punctuation on docstrings
+    "PT013",   # Incorrect import of pytest
+    "RUF023",  # __slots__ is not sorted
+    "TRY003",  # Avoid specifying long messages outside the exception class
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pydoclint]
+ignore-one-line-docstrings = true
+
+[tool.ruff.lint.flake8-annotations]
+suppress-dummy-args = true
+suppress-none-returning = true
+
+[tool.ruff.lint.flake8-import-conventions.aliases]
+"matplotlib.pyplot" = "plt"
+numpy = "np"
+pandas = "pd"
+subprocess = "sp"
+datetime = "dt"
+
+[tool.ruff.lint.isort]
+force-wrap-aliases = true
+combine-as-imports = true
+lines-after-imports = 1
+lines-between-types = 1
+known-first-party = ["twosquares"]
