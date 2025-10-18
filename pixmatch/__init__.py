@@ -5,9 +5,10 @@ import time
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from multiprocessing import Pool
+from multiprocessing import Pool, Manager
 from pathlib import Path
 from threading import Event
+from typing import Union
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,25 @@ class ImageMatch:
     matches: list[Path] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class NewGroup:
+    group: "ImageMatch"  # forward-ref to your class
+
+
+@dataclass(frozen=True)
+class NewMatch:
+    group: "ImageMatch"
+    path: Path
+
+
+@dataclass(frozen=True)
+class Finished:
+    pass
+
+
+MatcherEvent = Union[NewGroup, NewMatch, Finished]
+
+
 # TODO: FINISHED signal?
 class ImageMatcher:
     def __init__(self, strength: int = 5, exact_match: bool = False, processes: int | None = None):
@@ -53,9 +73,8 @@ class ImageMatcher:
         self.processed_images = 0
         self.duplicate_images = 0
 
-        self._new_group_callbacks = []
-        self._new_match_callbacks = []
-        self._finish_callbacks = []
+        m = Manager()
+        self.events = m.Queue()
         self._hashes = defaultdict(ImageMatch)
         self._reverse_hashes = dict()
 
@@ -131,15 +150,6 @@ class ImageMatcher:
         for match_i, match in enumerate(self.matches[start:], start=start):
             match.match_i = match_i
 
-    def add_new_group_callback(self, callback):
-        self._new_group_callbacks.append(callback)
-
-    def add_new_match_callback(self, callback):
-        self._new_match_callbacks.append(callback)
-
-    def add_finish_callback(self, callback):
-        self._finish_callbacks.append(callback)
-
     def _process_image_callback(self, result):
         self._not_paused.wait()
         if self.is_finished():
@@ -167,15 +177,13 @@ class ImageMatcher:
             # This is a brand new match group!
             self._hashes[hash].match_i = len(self.matches)
             self.matches.append(self._hashes[hash])
-            for callback in self._new_group_callbacks:
-                callback(self._hashes[hash])
             self.duplicate_images += 2
+            self.events.put(NewGroup(self._hashes[hash]))
             logger.debug('New match group found: %s', self._hashes[hash].matches)
         else:
             # Just another match for an existing group...
-            for callback in self._new_match_callbacks:
-                callback(self._hashes[hash], path)
             self.duplicate_images += 1
+            self.events.put(NewMatch(self._hashes[hash], path))
             logger.debug('New match found for group #%s: %s',
                          self._hashes[hash].match_i,
                          self._hashes[hash].matches)
@@ -221,5 +229,4 @@ class ImageMatcher:
             tp.join()
 
         self._finished.set()
-        for callback in self._finish_callbacks:
-            callback()
+        self.events.put(Finished())

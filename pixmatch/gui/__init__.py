@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Sequence
 from PIL import Image
 from PySide6 import QtConcurrent, QtCore, QtGui, QtWidgets
 
-from pixmatch import ImageMatcher, ImageMatch
+from pixmatch import ImageMatcher, ImageMatch, NewGroup, NewMatch, Finished
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageViewPane, SelectionState
 
@@ -80,19 +80,23 @@ class ProcessorThread(QtCore.QRunnable):
         self.args = args
         self.kwargs = kwargs
         self.processor = processor
-        self.processor.add_new_match_callback(self.on_new_match_found)
-        self.processor.add_new_group_callback(self.on_new_match_group_found)
-        self.processor.add_finish_callback(self.on_finish)
         self.signals = WorkerSignals()
 
-    def on_new_match_group_found(self, match_group: ImageMatch):
-        self.signals.new_group.emit(match_group)
+        # timer lives on the GUI thread; it polls the library queue
+        self._poller = QtCore.QTimer()
+        self._poller.setInterval(20)
+        self._poller.timeout.connect(self._drain_events)
+        self._poller.start()
 
-    def on_new_match_found(self, match_group: ImageMatch, new_match: Path):
-        self.signals.new_match.emit((match_group, new_match))
-
-    def on_finish(self):
-        self.signals.finish.emit()
+    def _drain_events(self):
+        while not self.processor.events.empty():
+            evt = self.processor.events.get_nowait()
+            if isinstance(evt, NewGroup):
+                self.signals.new_group.emit(evt.group)
+            elif isinstance(evt, NewMatch):
+                self.signals.new_match.emit((evt.group, evt.path))
+            elif isinstance(evt, Finished):
+                self.signals.finish.emit()
 
     def run(self):
         self.processor.run(*self.args, **self.kwargs)
