@@ -1,55 +1,14 @@
 # TODO: Confirm to close
 # TODO: Validate that users don't select overlapping paths...
 
-import os
-from datetime import datetime, timezone
-
-from enum import Enum, auto
 from pathlib import Path
-from threading import Thread
-from typing import Dict, Iterable, List, Sequence
 
-from PIL import Image
-from PySide6 import QtConcurrent, QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from pixmatch import ImageMatcher, ImageMatch, NewGroup, NewMatch, Finished
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageViewPane, SelectionState
 
-
-
-def human_bytes(
-        n: int,
-        *,
-        base: int = 1000,
-        decimals: int = 0,
-        units: Iterable[str] = ("b","kb","mb","gb","tb","pb","eb","zb","yb")
-) -> str:
-    """
-    Convert a byte count to a human-readable string.
-
-    Args:
-        n: Byte count (e.g., from os.stat().st_size).
-        base: 1000 for SI (kb, mb, ...), 1024 for IEC-like step size.
-        decimals: Decimal places for non-byte units (0 -> '66kb', 1 -> '1.5gb').
-        units: Unit suffixes to use. Defaults to lowercase ('kb'); swap for ('B','kB','MB',...) if preferred.
-
-    Returns:
-        A compact string like '66kb', '1mb', '1.5gb', or '999b'.
-    """
-    if n < 0:
-        raise ValueError("Byte size cannot be negative")
-
-    i = 0
-    max_i = len(tuple(units)) - 1
-    while n >= base and i < max_i:
-        n /= base
-        i += 1
-
-    if i == 0 or decimals == 0:
-        # Bytes or integer formatting requested
-        return f"{int(n if i else n)}{tuple(units)[i]}"
-    return f"{n:.{decimals}f}{tuple(units)[i]}".rstrip("0").rstrip(".")
 
 
 class WorkerSignals(QtCore.QObject):
@@ -416,7 +375,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.duplicate_group_list = DuplicateGroupList(sizePolicy=MAX_SIZE_POLICY)
         self.duplicate_group_list.groupTileStateChanged.connect(self.on_match_state_changed)
-        self.duplicate_group_list.groupTileHovered.connect(self.on_thumbnail_hover)
+        self.duplicate_group_list.groupTileHovered.connect(self.image_view_area.set_image)
         self.duplicate_group_list.left_arrow.pressed.connect(self.on_page_down)
         self.duplicate_group_list.right_arrow.pressed.connect(self.on_page_up)
         outer_splitter.addWidget(self.duplicate_group_list)
@@ -581,27 +540,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 if tile.path == path:
                     tile.state = state
 
-    def on_thumbnail_hover(self, path):
-        path = Path(path)
-        pixmap = QtGui.QPixmap(path)
-        pixmap_size = pixmap.size()
-        if self.preview_resized.isChecked():
-            self.image_view_area.scaled.setPixmap(pixmap)
-        else:
-            self.image_view_area.raw_label.setPixmap(pixmap)
-            self.image_view_area.raw_label.resize(pixmap_size)
-            self.image_view_area.update()
-
-        st = path.stat()
-        modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
-        self.image_view_area.status.setText(
-            f"{path.absolute()} ("
-            f"{human_bytes(st.st_size)} "
-            f"- {pixmap_size.width()},{pixmap_size.height()}px "
-            f"- {modified.strftime('%m/%d/%Y')}"
-            f")"
-        )
-
     # region File Path Selection display
     def build_file_path_selection_display(self):
 
@@ -681,14 +619,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return self.image_view_area
 
     def preview_resized_changed(self):
-        if self.preview_resized.isChecked():
-            self.image_view_area.stack.setCurrentIndex(0)
-            self.image_view_area.scaled.setPixmap(self.image_view_area.raw_label.pixmap())
-        else:
-            self.image_view_area.stack.setCurrentIndex(1)
-            self.image_view_area.raw_label.setPixmap(self.image_view_area.scaled.orig_pixmap)
-            self.image_view_area.raw_label.resize(self.image_view_area.scaled.orig_pixmap.size())
-            self.image_view_area.update()
+        self.image_view_area.set_index(int(not self.preview_resized.isChecked()))
     # endregion
 
     def build_statusbar(self) -> None:

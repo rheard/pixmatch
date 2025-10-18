@@ -1,13 +1,12 @@
-import os
-
+from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
-from PIL import Image
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
+from pixmatch.utils import human_bytes
 
 
 class SelectionState(Enum):
@@ -44,12 +43,25 @@ def _load_pixmap(path: Path | str, thumb_size: int) -> QtGui.QPixmap:
     return pm.scaled(thumb_size, thumb_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
 
 
+def movie_size(movie: QtGui.QMovie):
+    movie.jumpToFrame(0)
+    rect = QtCore.QRect()
+    for i in range(movie.frameCount()):
+        movie.jumpToNextFrame()
+        rect |= movie.frameRect()
+    width = rect.x() + rect.width()
+    height = rect.y() + rect.height()
+
+    return QtCore.QSize(width, height)
+
+
 class ImageViewPane(QtWidgets.QWidget):
     """Container with a stacked image viewer and a bottom overlay status label."""
     def __init__(self, parent=None):
         super().__init__(parent)
 
         # --- viewers ---
+        self.current_path = None
         self.scaled = ScaledLabel(contentsMargins=NO_MARGIN, sizePolicy=MAX_SIZE_POLICY)
         self.scaled.setMinimumSize(10, 10)
 
@@ -78,6 +90,184 @@ class ImageViewPane(QtWidgets.QWidget):
     # Optional helper you can call to update the text
     def set_status(self, text: str):
         self.status.setText(text)
+
+    def set_index(self, index: int):
+        if index not in (0, 1):
+            raise ValueError('Valid index must be 0 or 1 for the image pane to select!')
+
+        if self.current_path and self.current_path.suffix.lower() == '.gif':
+            if index == 0:
+                self.stack.setCurrentIndex(0)
+                self.scaled.setMovie(self.raw_label.movie())
+                self.raw_label.clear()
+            else:
+                self.stack.setCurrentIndex(1)
+                self.raw_label.setMovie(self.scaled.orig_movie)
+                self.raw_label.resize(self.scaled._movieSize)
+                self.update()
+            return
+
+        if index == 0:
+            self.stack.setCurrentIndex(0)
+            self.scaled.setPixmap(self.raw_label.pixmap())
+            self.raw_label.clear()
+        else:
+            self.stack.setCurrentIndex(1)
+            self.raw_label.setPixmap(self.scaled.orig_pixmap)
+            self.raw_label.resize(self.scaled.orig_pixmap.size())
+            self.scaled.clear()
+            self.update()
+
+    def set_image(self, path):
+        path = Path(path)
+        self.current_path = path
+        if path.suffix.lower() == '.gif':
+            self.scaled.clear()
+            movie = QtGui.QMovie(str(path))
+            object_size = movie_size(movie)
+
+            if self.stack.currentIndex() == 0:
+                self.scaled.setMovie(movie)
+            else:
+                existing_movie = self.raw_label.movie()
+                if existing_movie:
+                    existing_movie.stop()
+                    existing_movie.deleteLater()
+                self.raw_label.setMovie(movie)
+                self.raw_label.resize(object_size)
+                movie.start()
+                self.update()
+        else:
+            pixmap = QtGui.QPixmap(path)
+            object_size = pixmap.size()
+
+            if self.stack.currentIndex() == 0:
+                self.scaled.setPixmap(pixmap)
+            else:
+                self.raw_label.setPixmap(pixmap)
+                self.raw_label.resize(object_size)
+                self.update()
+
+        st = path.stat()
+        modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+        self.status.setText(
+            f"{path.absolute()} ("
+            f"{human_bytes(st.st_size)} "
+            f"- {object_size.width()},{object_size.height()}px "
+            f"- {modified.strftime('%m/%d/%Y')}"
+            f")"
+        )
+
+
+class ScaledLabel(QtWidgets.QLabel):
+    """
+    A version of the above ScaledLabel but for gifs/movies
+
+    https://stackoverflow.com/questions/72188903
+    https://stackoverflow.com/questions/77602181
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._movieSize = QtCore.QSize()
+        self._minSize = QtCore.QSize()
+        self.object_size = QtCore.QSize()
+        self.orig_pixmap = self.pixmap()
+        self.orig_movie = self.movie()
+
+    def clear(self):
+        super().clear()
+        self.orig_pixmap = None
+        if self.orig_movie:
+            self.orig_movie.stop()
+            self.orig_movie.deleteLater()
+            self.orig_movie = None
+
+    def minimumSizeHint(self):
+        if self._minSize.isValid():
+            return self._minSize
+        return super().minimumSizeHint()
+
+    def setPixmap(self, pixmap):  # overiding setPixmap
+        if not pixmap:
+            return
+        self.clear()
+        self.orig_pixmap = pixmap
+        return super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.KeepAspectRatio))
+
+    def setMovie(self, movie):
+        if self.movie() == movie:
+            return
+        if self.orig_movie:
+            self.clear()
+        super().setMovie(movie)
+        self.orig_movie = movie
+
+        if not isinstance(movie, QtGui.QMovie) or not movie.isValid():
+            self._movieSize = QtCore.QSize()
+            self._minSize = QtCore.QSize()
+            self.updateGeometry()
+            return
+
+        cf = movie.currentFrameNumber()
+        state = movie.state()
+        movie.jumpToFrame(0)
+        self._movieSize = movie_size(movie)
+        width = self._movieSize.width()
+        height = self._movieSize.height()
+
+        if width == height and False:
+            if width < 4:
+                self._minSize = self._movieSize
+            else:
+                self._minSize = QtCore.QSize(4, 4)
+        else:
+            minimum = min(width, height)
+            maximum = max(width, height)
+            ratio = maximum / minimum
+            base = min(4, minimum)
+            self._minSize = QtCore.QSize(base, round(base * ratio))
+            if minimum == width:
+                self._minSize.transpose()
+
+        movie.jumpToFrame(cf)
+        if state == movie.MovieState.Running:
+            movie.setPaused(False)
+        else:
+            movie.start()
+        self.updateGeometry()
+
+    def paintEvent(self, event):
+        movie = self.movie()
+        if not isinstance(movie, QtGui.QMovie) or not movie.isValid():
+            super().paintEvent(event)
+            if self.orig_pixmap:
+                self.setPixmap(self.orig_pixmap)
+            return
+
+        qp = QtGui.QPainter(self)
+        self.drawFrame(qp)
+
+        cr = self.contentsRect()
+        margin = self.margin()
+        cr.adjust(margin, margin, -margin, -margin)
+
+        style = self.style()
+        alignment = style.visualAlignment(self.layoutDirection(), self.alignment())
+        maybeSize = self._movieSize.scaled(cr.size(), QtCore.Qt.KeepAspectRatio)
+
+        if maybeSize != movie.scaledSize():
+            movie.setScaledSize(maybeSize)
+            style.drawItemPixmap(
+                qp, cr, alignment,
+                movie.currentPixmap().scaled(cr.size(), QtCore.Qt.KeepAspectRatio)
+            )
+
+        else:
+            style.drawItemPixmap(
+                qp, cr, alignment,
+                movie.currentPixmap()
+            )
+
 
 
 class ThumbnailTile(QtWidgets.QFrame):
@@ -324,28 +514,8 @@ class DuplicateGroupList(QtWidgets.QWidget):
         self.groupTileStateChanged.emit(path, state)
 
 
-# -----------------------------------------------------------------------------
-# Main Window
-# -----------------------------------------------------------------------------
-
-
 class DirFileSystemModel(QtWidgets.QFileSystemModel):
     def hasChildren(self, /, parent: QtCore.QModelIndex | QtCore.QPersistentModelIndex = ...):
         file_info = self.fileInfo(parent)
         _dir = QtCore.QDir(file_info.absoluteFilePath())
         return bool(_dir.entryList(self.filter()))
-
-
-class ScaledLabel(QtWidgets.QLabel):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.orig_pixmap = self.pixmap()
-
-    def resizeEvent(self, event):
-        self.setPixmap(self.orig_pixmap)
-
-    def setPixmap(self, pixmap):  # overiding setPixmap
-        if not pixmap:
-            return
-        self.orig_pixmap = pixmap
-        return super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.KeepAspectRatio))
