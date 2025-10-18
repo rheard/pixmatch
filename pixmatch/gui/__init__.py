@@ -495,10 +495,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
     def set_duplicate_groups_label(self, duplicate_groups):
-        self._dup_groups_label.setText(f"Remaining files....{duplicate_groups}")
+        self._dup_groups_label.setText(f"Duplicate groups....{duplicate_groups}")
 
     def set_duplicate_images_label(self, duplicate_images):
-        self._dup_pictures_label.setText(f"Loaded pictures..{duplicate_images}")
+        self._dup_pictures_label.setText(f"Duplicate pictures..{duplicate_images}")
 
     def update_labels(self):
         self.set_duplicate_groups_label(len(self.processor.matches))
