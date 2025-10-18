@@ -395,7 +395,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         tile.stateChanged.connect(self.tileStateChanged)
         tile.hovered.connect(self.tileHovered)
         self._tiles.append(tile)
-        self.layout.addWidget(tile)
+        self.layout.insertWidget(len(self._tiles) - 1, tile)
 
 
 class DuplicateGroupList(QtWidgets.QWidget):
