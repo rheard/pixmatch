@@ -528,12 +528,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for group in self.duplicate_group_list._rows:
             for tile in group.tiles():
-                set_state = self.file_states.get(tile.path)
+                set_state = self.file_states.get(Path(tile.path))
                 if set_state:
                     tile.state = set_state
 
     def on_match_state_changed(self, path, state):
-        self.file_states[path] = state
+        self.file_states[Path(path)] = state
 
         for group in self.duplicate_group_list._rows:
             for tile in group.tiles():

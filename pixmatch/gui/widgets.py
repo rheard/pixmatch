@@ -27,7 +27,7 @@ STATE_COLORS = {
 # region Image view panel
 def _load_pixmap(path: Path | str, thumb_size: int) -> QtGui.QPixmap:
     """Load an image from disk and scale to a square thumbnail."""
-    pm = QtGui.QPixmap(path)
+    pm = QtGui.QPixmap(str(path))
     if pm.isNull():
         # Fallback: generate a checkerboard if load failed.
         pm = QtGui.QPixmap(thumb_size, thumb_size)
@@ -147,7 +147,7 @@ class ImageViewPane(QtWidgets.QWidget):
                 movie.start()
                 self.update()
         else:
-            pixmap = QtGui.QPixmap(path)
+            pixmap = QtGui.QPixmap(str(path))
             object_size = pixmap.size()
 
             if self.stack.currentIndex() == 0:
@@ -341,7 +341,7 @@ class ThumbnailTile(QtWidgets.QFrame):
 
     def enterEvent(self, e: QtGui.QEnterEvent) -> None:
         # fire when the cursor enters the tile
-        self.hovered.emit(self._path)
+        self.hovered.emit(str(self._path))
         super().enterEvent(e)
 
     def _apply_state_style(self) -> None:
