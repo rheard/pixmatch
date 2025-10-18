@@ -24,6 +24,7 @@ STATE_COLORS = {
 }
 
 
+# region Image view panel
 def _load_pixmap(path: Path | str, thumb_size: int) -> QtGui.QPixmap:
     """Load an image from disk and scale to a square thumbnail."""
     pm = QtGui.QPixmap(path)
@@ -32,7 +33,7 @@ def _load_pixmap(path: Path | str, thumb_size: int) -> QtGui.QPixmap:
         pm = QtGui.QPixmap(thumb_size, thumb_size)
         pm.fill(QtGui.QColor("lightgray"))
         p = QtGui.QPainter(pm)
-        p.setPen(QtCore.Qt.NoPen)
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
         c1 = QtGui.QColor(210, 210, 210)
         c2 = QtGui.QColor(180, 180, 180)
         for y in range(0, thumb_size, 16):
@@ -40,7 +41,9 @@ def _load_pixmap(path: Path | str, thumb_size: int) -> QtGui.QPixmap:
                 p.setBrush(c1 if ((x // 16 + y // 16) % 2 == 0) else c2)
                 p.drawRect(x, y, 16, 16)
         p.end()
-    return pm.scaled(thumb_size, thumb_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    return pm.scaled(thumb_size, thumb_size,
+                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                     QtCore.Qt.TransformationMode.SmoothTransformation)
 
 
 def movie_size(movie: QtGui.QMovie):
@@ -65,9 +68,12 @@ class ImageViewPane(QtWidgets.QWidget):
         self.scaled = ScaledLabel(contentsMargins=NO_MARGIN, sizePolicy=MAX_SIZE_POLICY)
         self.scaled.setMinimumSize(10, 10)
 
-        self.raw_label = QtWidgets.QLabel(contentsMargins=NO_MARGIN)
-        self.scroll = QtWidgets.QScrollArea(contentsMargins=NO_MARGIN, widget=self.raw_label,
-                                            sizePolicy=MAX_SIZE_POLICY)
+        self.raw_label = QtWidgets.QLabel()
+        self.raw_label.setContentsMargins(NO_MARGIN)
+        self.scroll = QtWidgets.QScrollArea()
+        self.scroll.setContentsMargins(NO_MARGIN)
+        self.scroll.setSizePolicy(MAX_SIZE_POLICY)
+        self.scroll.setWidget(self.raw_label)
 
         # Only one visible at a time -> use a stack
         self.stack = QtWidgets.QStackedWidget()
@@ -75,15 +81,18 @@ class ImageViewPane(QtWidgets.QWidget):
         self.stack.addWidget(self.scroll)   # index 1
 
         # --- overlay status label ---
-        self.status = QtWidgets.QLabel(contentsMargins=NO_MARGIN, objectName="imageStatus", text="Ready",
-                                       maximumHeight=16, alignment=QtCore.Qt.AlignmentFlag.AlignBottom)
+        self.status = QtWidgets.QLabel(text="Ready", alignment=QtCore.Qt.AlignmentFlag.AlignBottom)
+        self.status.setContentsMargins(NO_MARGIN)
+        self.status.setObjectName("imageStatus")
+        self.status.setMaximumHeight(16)
         # self.status.setStyleSheet("""
         #     QLabel#imageStatus {
         #         font-size: 14px;
         #     }
         # """)
 
-        lay = QtWidgets.QVBoxLayout(self, contentsMargins=NO_MARGIN)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(NO_MARGIN)
         lay.addWidget(self.stack)
         lay.addWidget(self.status)
 
@@ -192,7 +201,7 @@ class ScaledLabel(QtWidgets.QLabel):
             return
         self.clear()
         self.orig_pixmap = pixmap
-        return super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.KeepAspectRatio))
+        return super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.AspectRatioMode.KeepAspectRatio))
 
     def setMovie(self, movie):
         if self.movie() == movie:
@@ -253,13 +262,13 @@ class ScaledLabel(QtWidgets.QLabel):
 
         style = self.style()
         alignment = style.visualAlignment(self.layoutDirection(), self.alignment())
-        maybeSize = self._movieSize.scaled(cr.size(), QtCore.Qt.KeepAspectRatio)
+        maybeSize = self._movieSize.scaled(cr.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
 
         if maybeSize != movie.scaledSize():
             movie.setScaledSize(maybeSize)
             style.drawItemPixmap(
                 qp, cr, alignment,
-                movie.currentPixmap().scaled(cr.size(), QtCore.Qt.KeepAspectRatio)
+                movie.currentPixmap().scaled(cr.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
             )
 
         else:
@@ -267,9 +276,10 @@ class ScaledLabel(QtWidgets.QLabel):
                 qp, cr, alignment,
                 movie.currentPixmap()
             )
+# endregion
 
 
-
+# region Thumbnail tile panel
 class ThumbnailTile(QtWidgets.QFrame):
     """
     Clickable thumbnail tile that cycles between KEEP → DELETE → IGNORE.
@@ -282,18 +292,21 @@ class ThumbnailTile(QtWidgets.QFrame):
     hovered = QtCore.Signal(str)
 
     def __init__(self, path: Path | str, pixmap: QtGui.QPixmap, thumb_size: int = 32, parent=None):
-        super().__init__(parent, objectName="ThumbnailTile", frameShape=QtWidgets.QFrame.Box, lineWidth=2,
-                         cursor=QtCore.Qt.PointingHandCursor)
+        super().__init__(parent, frameShape=QtWidgets.QFrame.Shape.Box, lineWidth=2)
+        self.setObjectName("ThumbnailTile")
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
 
         self._path = path
         self._state = SelectionState.KEEP
         self._thumb_size = thumb_size
 
-        self._image = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter, pixmap=pixmap)
+        self._image = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter, pixmap=pixmap)
         self._image.setFixedSize(thumb_size, thumb_size)
 
-        lay = QtWidgets.QVBoxLayout(self, contentsMargins=NO_MARGIN, spacing=0)
-        lay.addWidget(self._image, alignment=QtCore.Qt.AlignCenter)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(NO_MARGIN)
+        lay.setSpacing(0)
+        lay.addWidget(self._image, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
 
         self._apply_state_style()
 
@@ -320,7 +333,7 @@ class ThumbnailTile(QtWidgets.QFrame):
         self.state = STATE_ORDER[(idx + 1) % len(STATE_ORDER)]
 
     def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
-        if e.button() == QtCore.Qt.LeftButton:
+        if e.button() == QtCore.Qt.MouseButton.LeftButton:
             self.cycle_state()
             e.accept()
         else:
@@ -364,7 +377,9 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         super().__init__(parent)
         self._tiles: List[ThumbnailTile] = []
         self._thumb_size = thumb_size
-        self.layout = QtWidgets.QHBoxLayout(self, contentsMargins=NO_MARGIN, spacing=0)
+        self.layout = QtWidgets.QHBoxLayout(self)
+        self.layout.setContentsMargins(NO_MARGIN)
+        self.layout.setSpacing(0)
 
         for path in images:
             self.add_tile(path)
@@ -502,8 +517,6 @@ class DuplicateGroupList(QtWidgets.QWidget):
             for tile in row.tiles():
                 tile.state = SelectionState.KEEP
 
-    # --- internals -----------------------------------------------------------------
-
     def _clear_rows(self) -> None:
         for row in self._rows:
             row.setParent(None)
@@ -512,6 +525,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
 
     def _on_tile_state_changed(self, path: str, state: SelectionState) -> None:
         self.groupTileStateChanged.emit(path, state)
+# endregion
 
 
 class DirFileSystemModel(QtWidgets.QFileSystemModel):
