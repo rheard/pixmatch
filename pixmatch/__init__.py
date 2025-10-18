@@ -10,16 +10,42 @@ from pathlib import Path
 from threading import Event
 from typing import Union
 
+import imagehash
+
+from PIL import Image
+
 logger = logging.getLogger(__name__)
 
+def phash_params_for_strength(strength: int) -> tuple[int, int]:
+    """
+    TODO: This sucks.
 
-def calculate_hash(file_path, block_size=65536):
-    hasher = hashlib.sha256()
-    with open(file_path, "rb") as file:
-        for block in iter(lambda: file.read(block_size), b""):
-            hasher.update(block)
-    return hasher.hexdigest()
+    Map 0..10 to (hash_size, highfreq_factor).
+    - 10..9: very strict, use a bigger hash with default oversampling
+    - 8..4: default (good balance)
+    - 3..0: same bits but slightly lower oversampling (a touch looser)
+    """
+    strength = max(0, min(10, strength))
+    if strength >= 9:
+        return 16, 4    # 256-bit hash, strict
+    elif strength >= 4:
+        return 8, 4     # 64-bit hash, balanced
+    else:
+        return 8, 3     # same bits, slightly blurrier pre-DCT
 
+
+def calculate_hash(file_path, strength=5, exact_match=False):
+    if exact_match:
+        hasher = hashlib.sha256()
+        block_size = 65536
+        with open(file_path, "rb") as file:
+            for block in iter(lambda: file.read(block_size), b""):
+                hasher.update(block)
+        return hasher.hexdigest()
+
+    hash_size, highfreq_factor = phash_params_for_strength(strength)
+    with Image.open(file_path) as im:
+        return imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
 
 
 def _process_image(path: str | Path):
@@ -54,17 +80,14 @@ MatcherEvent = Union[NewGroup, NewMatch, Finished]
 
 # TODO: FINISHED signal?
 class ImageMatcher:
-    def __init__(self, strength: int = 5, exact_match: bool = False, processes: int | None = None):
+    SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif"}
+
+    def __init__(self, strength: int = 5, exact_match: bool = False, processes: int | None = None,
+                 extensions: set | None = None):
         if not (0 <= strength <= 10):
             raise ValueError("Strength must be between 0 and 10!")
 
-        if exact_match and strength != 10:
-            raise ValueError("Can only do exact matches with the strictest strength!")
-
-        if not exact_match:
-            raise NotImplementedError("Only exact MD5 hash matching is supported!")
-        else:
-            self.supported_exts = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif"}
+        self.extensions = extensions or self.SUPPORTED_EXTS
 
         self.strength = strength
         self.exact_match = exact_match
@@ -214,7 +237,7 @@ class ImageMatcher:
 
                         f = Path(os.path.join(root, f))
 
-                        if f.suffix.lower() not in self.supported_exts:
+                        if f.suffix.lower() not in self.extensions:
                             continue
 
                         self.found_images += 1

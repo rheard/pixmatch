@@ -25,6 +25,7 @@ classifiers = [
 keywords = [""]
 dependencies = [
     "Pillow",
+    "imagehash",
 ]
 
 [project.optional-dependencies]
