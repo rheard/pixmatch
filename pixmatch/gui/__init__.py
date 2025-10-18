@@ -471,9 +471,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._gui_paused:
             return
 
+        page_this_belongs_on, row_this_is = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
         self.duplicate_group_list.update_page_indicator(self.current_page + 1, self.last_page + 1)
 
-        if self.current_page == self.last_page:
+        if self.current_page == page_this_belongs_on:
             self.duplicate_group_list.add_group(match_group.matches)
 
         self.set_duplicate_groups_label(len(self.processor.matches))
