@@ -1,6 +1,8 @@
 # TODO: Confirm to close
 # TODO: Validate that users don't select overlapping paths...
 
+import logging
+
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -10,6 +12,8 @@ from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageViewPane, SelectionState
 
 ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerSignals(QtCore.QObject):
@@ -647,7 +651,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
             if set_state == SelectionState.DELETE:
                 # TODO: This is just for testing:
-                print(f"Deleting {file}")
+                logger.info(f"Deleting {file}")
                 # file.unlink()
                 self.processor.remove(file)
             elif set_state == SelectionState.IGNORE:
