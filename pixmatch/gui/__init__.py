@@ -169,6 +169,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # region Tools menu
         autoselect = QtGui.QAction("Auto-select", self)
+        autoselect.setEnabled(False)  # TODO:
 
         tool_menu = menu.addMenu("&Tools")
         tool_menu.addAction(autoselect)
@@ -176,6 +177,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # region Actions menu
         run_move = QtGui.QAction("Move", self)
+        run_move.setEnabled(False)  # TODO:
         run_delete = QtGui.QAction("Delete", self)
         run_delete.triggered.connect(self.on_delete)
         run_ignore = QtGui.QAction("Save ignored pictures", self)
@@ -211,6 +213,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # region General controls area (top-right)
         # region Control buttons
         autoselect_btn = QtWidgets.QPushButton("Auto-select")
+        autoselect_btn.setEnabled(False)  # TODO:
 
         tools = QtWidgets.QVBoxLayout()
         tools.addWidget(autoselect_btn)
@@ -220,6 +223,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tool_box.setMaximumHeight(60)
 
         move_btn = QtWidgets.QPushButton("Move")
+        move_btn.setEnabled(False)  # TODO:
         delete_btn = QtWidgets.QPushButton("Delete")
         delete_btn.pressed.connect(self.on_delete)
         save_ignored_btn = QtWidgets.QPushButton("Save ignored")

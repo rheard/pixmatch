@@ -1,3 +1,5 @@
+# TODO: Add rotations!
+
 import hashlib
 import logging
 import os
