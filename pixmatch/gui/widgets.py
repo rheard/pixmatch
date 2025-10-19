@@ -2,9 +2,11 @@ from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
+from zipfile import ZipFile
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from pixmatch import ZipPath
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.utils import human_bytes
 
@@ -25,9 +27,15 @@ STATE_COLORS = {
 
 
 # region Image view panel
-def _load_pixmap(path: Path | str, thumb_size: int) -> QtGui.QPixmap:
+def _load_pixmap(path: ZipPath, thumb_size: int) -> QtGui.QPixmap:
     """Load an image from disk and scale to a square thumbnail."""
-    pm = QtGui.QPixmap(str(path))
+    if path.subpath:
+        with ZipFile(path.path) as zf:
+            pm = QtGui.QPixmap()
+            pm.loadFromData(zf.read(path.subpath))
+    else:
+        pm = QtGui.QPixmap(str(path.path))
+
     if pm.isNull():
         # Fallback: generate a checkerboard if load failed.
         pm = QtGui.QPixmap(thumb_size, thumb_size)
@@ -65,11 +73,13 @@ class ImageViewPane(QtWidgets.QWidget):
 
         # --- viewers ---
         self.current_path = None
+        self._buffer = self._qbytearray = None
         self.scaled = ScaledLabel(contentsMargins=NO_MARGIN, sizePolicy=MAX_SIZE_POLICY)
         self.scaled.setMinimumSize(10, 10)
 
         self.raw_label = QtWidgets.QLabel()
         self.raw_label.setContentsMargins(NO_MARGIN)
+        self.raw_label.setMargin(0)
         self.scroll = QtWidgets.QScrollArea()
         self.scroll.setContentsMargins(NO_MARGIN)
         self.scroll.setSizePolicy(MAX_SIZE_POLICY)
@@ -104,50 +114,63 @@ class ImageViewPane(QtWidgets.QWidget):
         if index not in (0, 1):
             raise ValueError('Valid index must be 0 or 1 for the image pane to select!')
 
-        if self.current_path and self.current_path.suffix.lower() == '.gif':
-            if index == 0:
-                self.stack.setCurrentIndex(0)
-                self.scaled.setMovie(self.raw_label.movie())
-                self.raw_label.clear()
-            else:
-                self.stack.setCurrentIndex(1)
-                self.raw_label.setMovie(self.scaled.orig_movie)
-                self.raw_label.resize(self.scaled._movieSize)
-                self.update()
+        self.stack.setCurrentIndex(index)
+
+        if self.current_path:
+            self.set_image(self.current_path)
+
+        self.update()
+
+    def clear(self):
+        existing_movie = self.raw_label.movie()
+        if existing_movie:
+            existing_movie.stop()
+            existing_movie.deleteLater()
+        self.raw_label.clear()
+
+        self.scaled.clear()
+
+    def set_image(self, path: ZipPath):
+        if path == self.current_path:
             return
 
-        if index == 0:
-            self.stack.setCurrentIndex(0)
-            self.scaled.setPixmap(self.raw_label.pixmap())
-            self.raw_label.clear()
-        else:
-            self.stack.setCurrentIndex(1)
-            self.raw_label.setPixmap(self.scaled.orig_pixmap)
-            self.raw_label.resize(self.scaled.orig_pixmap.size())
-            self.scaled.clear()
-            self.update()
-
-    def set_image(self, path):
-        path = Path(path)
         self.current_path = path
-        if path.suffix.lower() == '.gif':
-            self.scaled.clear()
-            movie = QtGui.QMovie(str(path))
+        file_size = modified = None
+        self.clear()
+        if path.is_gif:
+            if path.subpath:
+                with ZipFile(path.path) as zf:
+                    st = zf.getinfo(path.subpath)
+                    modified = st.date_time
+                    file_size = st.file_size
+                    self._qbytearray = QtCore.QByteArray(zf.read(path.subpath))
+                    self._buffer = QtCore.QBuffer(self._qbytearray)
+                    self._buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly)
+
+                    movie = QtGui.QMovie()
+                    movie.setFormat(b'gif')
+                    movie.setDevice(self._buffer)
+            else:
+                movie = QtGui.QMovie(path.path)
             object_size = movie_size(movie)
 
             if self.stack.currentIndex() == 0:
                 self.scaled.setMovie(movie)
             else:
-                existing_movie = self.raw_label.movie()
-                if existing_movie:
-                    existing_movie.stop()
-                    existing_movie.deleteLater()
                 self.raw_label.setMovie(movie)
                 self.raw_label.resize(object_size)
-                movie.start()
-                self.update()
+            movie.start()
+            self.update()
         else:
-            pixmap = QtGui.QPixmap(str(path))
+            if path.subpath:
+                with ZipFile(path.path) as zf:
+                    st = zf.getinfo(path.subpath)
+                    modified = st.date_time
+                    file_size = st.file_size
+                    pixmap = QtGui.QPixmap()
+                    pixmap.loadFromData(zf.read(path.subpath))
+            else:
+                pixmap = QtGui.QPixmap(str(path.path))
             object_size = pixmap.size()
 
             if self.stack.currentIndex() == 0:
@@ -157,13 +180,18 @@ class ImageViewPane(QtWidgets.QWidget):
                 self.raw_label.resize(object_size)
                 self.update()
 
-        st = path.stat()
-        modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+        if not path.subpath:
+            path = Path(path.path)
+            st = path.stat()
+            modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime('%m/%d/%Y')
+            file_size = human_bytes(st.st_size)
+        elif modified:
+            modified = f"{modified[1]}/{modified[2]}/{modified[0]}"
         self.status.setText(
             f"{path.absolute()} ("
-            f"{human_bytes(st.st_size)} "
+            f"{file_size} "
             f"- {object_size.width()},{object_size.height()}px "
-            f"- {modified.strftime('%m/%d/%Y')}"
+            f"- {modified}"
             f")"
         )
 
@@ -206,7 +234,7 @@ class ScaledLabel(QtWidgets.QLabel):
     def setMovie(self, movie):
         if self.movie() == movie:
             return
-        if self.orig_movie:
+        if self.orig_movie and movie:
             self.clear()
         super().setMovie(movie)
         self.orig_movie = movie
@@ -218,7 +246,6 @@ class ScaledLabel(QtWidgets.QLabel):
             return
 
         cf = movie.currentFrameNumber()
-        state = movie.state()
         movie.jumpToFrame(0)
         self._movieSize = movie_size(movie)
         width = self._movieSize.width()
@@ -233,10 +260,6 @@ class ScaledLabel(QtWidgets.QLabel):
             self._minSize.transpose()
 
         movie.jumpToFrame(cf)
-        if state == movie.MovieState.Running:
-            movie.setPaused(False)
-        else:
-            movie.start()
         self.updateGeometry()
 
     def paintEvent(self, event):
@@ -282,10 +305,10 @@ class ThumbnailTile(QtWidgets.QFrame):
         path: Image path (opaque identifier for the caller).
         stateChanged(path: str, state: SelectionState): Emitted on state updates.
     """
-    stateChanged = QtCore.Signal(str, SelectionState)
-    hovered = QtCore.Signal(str)
+    stateChanged = QtCore.Signal(ZipPath, SelectionState)
+    hovered = QtCore.Signal(ZipPath)
 
-    def __init__(self, path: Path | str, pixmap: QtGui.QPixmap, thumb_size: int = 32, parent=None):
+    def __init__(self, path: ZipPath, pixmap: QtGui.QPixmap, thumb_size: int = 32, parent=None):
         super().__init__(parent, frameShape=QtWidgets.QFrame.Shape.Box, lineWidth=2)
         self.setObjectName("ThumbnailTile")
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
@@ -305,7 +328,7 @@ class ThumbnailTile(QtWidgets.QFrame):
         self._apply_state_style()
 
     @property
-    def path(self) -> str:
+    def path(self) -> ZipPath:
         return self._path
 
     @property
@@ -319,12 +342,16 @@ class ThumbnailTile(QtWidgets.QFrame):
             return
         self._state = state
         self._apply_state_style()
-        self.stateChanged.emit(str(self._path), self._state)
+        self.stateChanged.emit(self._path, self._state)
 
     def cycle_state(self) -> None:
         """Advance KEEP → DELETE → IGNORE → KEEP."""
         idx = STATE_ORDER.index(self._state)
-        self.state = STATE_ORDER[(idx + 1) % len(STATE_ORDER)]
+        locked = bool(self._path.subpath)
+        next_state = STATE_ORDER[(idx + 1) % len(STATE_ORDER)]
+        if locked and next_state == SelectionState.DELETE:
+            next_state = STATE_ORDER[(idx + 2) % len(STATE_ORDER)]
+        self.state = next_state
 
     def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
         if e.button() == QtCore.Qt.MouseButton.LeftButton:
@@ -335,7 +362,7 @@ class ThumbnailTile(QtWidgets.QFrame):
 
     def enterEvent(self, e: QtGui.QEnterEvent) -> None:
         # fire when the cursor enters the tile
-        self.hovered.emit(str(self._path))
+        self.hovered.emit(self._path)
         super().enterEvent(e)
 
     def _apply_state_style(self) -> None:
@@ -364,10 +391,10 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     Signals:
         tileStateChanged(path: str, state: SelectionState)
     """
-    tileStateChanged = QtCore.Signal(str, SelectionState)
-    tileHovered = QtCore.Signal(str)
+    tileStateChanged = QtCore.Signal(ZipPath, SelectionState)
+    tileHovered = QtCore.Signal(ZipPath)
 
-    def __init__(self, images: Sequence[Path | str], thumb_size: int = 32, parent=None):
+    def __init__(self, images: Sequence[ZipPath], thumb_size: int = 32, parent=None):
         super().__init__(parent)
         self._tiles: List[ThumbnailTile] = []
         self._thumb_size = thumb_size
@@ -383,7 +410,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     def tiles(self) -> Iterable[ThumbnailTile]:
         return list(self._tiles)
 
-    def add_tile(self, path: Path | str):
+    def add_tile(self, path: ZipPath):
         pm = _load_pixmap(path, self._thumb_size)
         tile = ThumbnailTile(path=path, pixmap=pm, thumb_size=self._thumb_size)
         tile.stateChanged.connect(self.tileStateChanged)
@@ -408,8 +435,8 @@ class DuplicateGroupList(QtWidgets.QWidget):
         - Borders/badges are colored by state.
     """
 
-    groupTileStateChanged = QtCore.Signal(str, SelectionState)  # path, state
-    groupTileHovered = QtCore.Signal(str)
+    groupTileStateChanged = QtCore.Signal(ZipPath, SelectionState)  # path, state
+    groupTileHovered = QtCore.Signal(ZipPath)
 
     def __init__(self, parent=None, *, max_rows: int = 25, thumb_size: int = 64, **kwargs):
         super().__init__(parent, **kwargs)
@@ -470,7 +497,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         """Set square thumbnail size for subsequent loads."""
         self._thumb_size = max(32, int(px))
 
-    def set_groups(self, groups: Sequence[Sequence[Path | str]]) -> None:
+    def set_groups(self, groups: Sequence[Sequence[ZipPath]]) -> None:
         """
         Load duplicate groups.
 
@@ -485,11 +512,10 @@ class DuplicateGroupList(QtWidgets.QWidget):
     def update_page_indicator(self, current_page, total_pages):
         self.page_indicator.setText(f"Page {current_page} of {total_pages}")
 
-    def add_group(self, group: Sequence[Path | str]) -> None:
+    def add_group(self, group: Sequence[ZipPath]) -> None:
         if len(self._rows) == self._max_rows:
             raise ValueError("Cannot add a new group to a fully filled group list!")
 
-        group = [str(x) for x in group]
         row = DuplicateGroupRow(group, thumb_size=self._thumb_size)
         row.tileStateChanged.connect(self.groupTileStateChanged)
         row.tileHovered.connect(self.groupTileHovered)
@@ -497,9 +523,9 @@ class DuplicateGroupList(QtWidgets.QWidget):
         self._vbox.insertWidget(tail_index, row)
         self._rows.append(row)
 
-    def decisions(self) -> Dict[str, SelectionState]:
+    def decisions(self) -> Dict[ZipPath, SelectionState]:
         """Collect {path: state} for all tiles across all rows."""
-        out: Dict[str, SelectionState] = {}
+        out: Dict[ZipPath, SelectionState] = {}
         for row in self._rows:
             for tile in row.tiles():
                 out[tile.path] = tile.state

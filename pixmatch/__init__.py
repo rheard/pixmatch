@@ -11,6 +11,7 @@ from multiprocessing import Pool, Manager
 from pathlib import Path
 from threading import Event
 from typing import Union
+from zipfile import ZipFile
 
 import imagehash
 
@@ -18,15 +19,27 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-def phash_params_for_strength(strength: int) -> tuple[int, int]:
-    """
-    TODO: This sucks.
 
-    Map 0..10 to (hash_size, highfreq_factor).
-    - 10..9: very strict, use a bigger hash with default oversampling
-    - 8..4: default (good balance)
-    - 3..0: same bits but slightly lower oversampling (a touch looser)
-    """
+@dataclass(frozen=True)
+class ZipPath:
+    path: str
+    subpath: str
+
+    @property
+    def path_obj(self):
+        return Path(self.path)
+
+    @property
+    def is_gif(self) -> bool:
+        return (not self.subpath and Path(self.path).suffix.lower() == '.gif') \
+            or (self.subpath and self.subpath.lower().endswith('.gif'))
+
+    def absolute(self):
+        return ZipPath(str(self.path_obj.absolute()), self.subpath)
+
+
+def phash_params_for_strength(strength: int) -> tuple[int, int]:
+    # TODO: This sucks.
     strength = max(0, min(10, strength))
     if strength >= 9:
         return 16, 4    # 256-bit hash, strict
@@ -46,18 +59,32 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
         return 6, 3     # same bits, slightly blurrier pre-DCT
 
 
-def calculate_hashes(file_path, strength=5, exact_match=False):
+def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
+    """
+    Calculate hashes for a given file.
+
+    Args:
+        f (IO or str or Path): Either a file path to process, or a in-memory BytesIO object ready for reading.
+        is_gif (bool): Is this gif data? Needed if passing an in-memory BytesIO object.
+        strength (int): A number between 0 and 10 on the strength of the matches.
+        exact_match (bool): Use exact SHA256 hahes?
+            If true, strength must be 10.
+            If false, perceptual hashes will be used, even with high strength.
+
+    Returns:
+        list: The found hashes.
+    """
     if exact_match:
         hasher = hashlib.sha256()
         block_size = 65536
-        with open(file_path, "rb") as file:
+        with (open(f, "rb") if isinstance(f, (str, Path)) else f) as file:
             for block in iter(lambda: file.read(block_size), b""):
                 hasher.update(block)
         return [hasher.hexdigest()]
 
     hash_size, highfreq_factor = phash_params_for_strength(strength)
-    with Image.open(file_path) as im:
-        if file_path.suffix.lower() == ".gif":
+    with Image.open(f) as im:
+        if is_gif:
             return [imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)]
 
         flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
@@ -70,13 +97,24 @@ def calculate_hashes(file_path, strength=5, exact_match=False):
 
 def _process_image(path: str | Path, strength=5, exact_match=False):
     path = Path(path)
-    return path, calculate_hashes(path, strength=strength, exact_match=exact_match)
+    if path.suffix.lower() != '.zip':
+        return path, calculate_hashes(path, is_gif=path.suffix.lower() == ".gif",
+                                      strength=strength, exact_match=exact_match)
+
+    results = dict()
+    with ZipFile(path) as zf:
+        for f in zf.filelist:
+            with zf.open(f) as zipped_file:
+                results[f.filename] = calculate_hashes(zipped_file, is_gif=f.filename.lower().endswith('.gif'),
+                                                       strength=strength, exact_match=exact_match)
+
+    return path, results
 
 
 @dataclass
 class ImageMatch:
     match_i: int | None = field(default=None)
-    matches: list[Path] = field(default_factory=list)
+    matches: list[ZipPath] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -87,7 +125,7 @@ class NewGroup:
 @dataclass(frozen=True)
 class NewMatch:
     group: "ImageMatch"
-    path: Path
+    path: ZipPath
 
 
 @dataclass(frozen=True)
@@ -100,7 +138,7 @@ MatcherEvent = Union[NewGroup, NewMatch, Finished]
 
 # TODO: FINISHED signal?
 class ImageMatcher:
-    SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif"}
+    SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
 
     def __init__(self, strength: int = 5, exact_match: bool = False, processes: int | None = None,
                  extensions: set | None = None):
@@ -167,7 +205,6 @@ class ImageMatcher:
         logger.info('Removing %s from %s', path, self.__class__.__name__)
         self.conditional_pause()
 
-        path = Path(path)
         hash = self._reverse_hashes.pop(path)
         self._hashes[hash].matches.remove(path)
         if len(self._hashes[hash].matches) == 1:
@@ -198,8 +235,16 @@ class ImageMatcher:
         if self.is_finished():
             return
 
-        path: Path
+        path: Path | str | ZipPath
         path, hashes = result
+
+        if isinstance(hashes, dict):
+            for sub_path, sub_hashes in hashes.items():
+                self._process_image_callback((ZipPath(str(path), sub_path), sub_hashes))
+            return
+
+        if not isinstance(path, ZipPath):
+            path = ZipPath(str(path), "")
 
         self.processed_images += 1
         for hash_ in hashes:

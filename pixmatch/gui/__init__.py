@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from pixmatch import ImageMatcher, ImageMatch, NewGroup, NewMatch, Finished
+from pixmatch import ImageMatcher, ImageMatch, NewGroup, NewMatch, Finished, ZipPath
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageViewPane, SelectionState
 
@@ -504,7 +504,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_new_match_found(self, response):
         match_group: ImageMatch
-        new_match: Path
+        new_match: ZipPath
         match_group, new_match = response
 
         if self._gui_paused:
@@ -552,12 +552,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for group in self.duplicate_group_list._rows:
             for tile in group.tiles():
-                set_state = self.file_states.get(Path(tile.path))
+                set_state = self.file_states.get(tile.path)
                 if set_state:
                     tile.state = set_state
 
-    def on_match_state_changed(self, path, state):
-        self.file_states[Path(path)] = state
+    def on_match_state_changed(self, path: ZipPath, state):
+        self.file_states[path] = state
 
         for group in self.duplicate_group_list._rows:
             for tile in group.tiles():
