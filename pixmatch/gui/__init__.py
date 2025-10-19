@@ -670,7 +670,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if set_state == SelectionState.DELETE:
                 # TODO: This is just for testing:
                 logger.info(f"Deleting {file}")
-                # file.unlink()
+                # Path(file.path).unlink()
                 self.processor.remove(file)
             elif set_state == SelectionState.IGNORE:
                 self.processor.remove(file)
