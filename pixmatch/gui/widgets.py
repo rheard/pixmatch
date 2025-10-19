@@ -139,7 +139,7 @@ class ImageViewPane(QtWidgets.QWidget):
             return
 
         self.current_path = path
-        file_size = modified = None
+        file_size = modified = uncompressed_size = None
         self.clear()
         if path.is_gif:
             # We're setting a movie...
@@ -182,6 +182,7 @@ class ImageViewPane(QtWidgets.QWidget):
                 # Basic image path
                 pixmap = QtGui.QPixmap(str(path.path))
 
+            uncompressed_size = pixmap.toImage().sizeInBytes()
             object_size = pixmap.size()
 
             if self.stack.currentIndex() == 0:
@@ -204,7 +205,7 @@ class ImageViewPane(QtWidgets.QWidget):
             modified = f"{modified[1]}/{modified[2]}/{modified[0]}"
         self.status.setText(
             f"{path.absolute()} ("
-            f"{human_bytes(file_size)} "
+            f"{human_bytes(file_size)} {f'({human_bytes(uncompressed_size)}) ' if uncompressed_size else ''}"
             f"- {object_size.width()},{object_size.height()}px "
             f"- {modified}"
             f")"
