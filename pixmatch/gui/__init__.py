@@ -71,6 +71,7 @@ class ProcessorThread(QtCore.QRunnable):
             elif isinstance(evt, NewMatch):
                 self.signals.new_match.emit((evt.group, evt.path))
             elif isinstance(evt, Finished):
+                self._poller.stop()
                 self.signals.finish.emit()
 
     def run(self):
@@ -452,11 +453,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 for i in range(self.selected_file_path_display.count())
             ]
 
-            thread = ProcessorThread(self.processor, target_paths)
-            thread.signals.new_group.connect(self.on_new_match_group_found)
-            thread.signals.new_match.connect(self.on_new_match_found)
-            thread.signals.finish.connect(self.on_finish)
-            self.threadpool.start(thread)
+            self.thread = ProcessorThread(self.processor, target_paths)
+            self.thread.signals.new_group.connect(self.on_new_match_group_found)
+            self.thread.signals.new_match.connect(self.on_new_match_found)
+            self.thread.signals.finish.connect(self.on_finish)
+            self.threadpool.start(self.thread)
             self.pause_btn.setEnabled(True)
             self._elapsed_secs = 0
             self._timer.start()
@@ -476,6 +477,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pause_btn.setEnabled(True)
         self.stop_btn.setChecked(False)
         self._timer.stop()
+        self.thread = None
 
     def on_delete(self, *_):
         self.process_file_states({SelectionState.DELETE})
