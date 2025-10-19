@@ -685,6 +685,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if v not in states
         }
 
+        if self.current_page > self.last_page:
+            self.current_page = self.last_page
+
         self.update_labels()
         self.update_group_list()
         if not is_paused:
