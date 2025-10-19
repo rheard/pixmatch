@@ -224,19 +224,13 @@ class ScaledLabel(QtWidgets.QLabel):
         width = self._movieSize.width()
         height = self._movieSize.height()
 
-        if width == height and False:
-            if width < 4:
-                self._minSize = self._movieSize
-            else:
-                self._minSize = QtCore.QSize(4, 4)
-        else:
-            minimum = min(width, height)
-            maximum = max(width, height)
-            ratio = maximum / minimum
-            base = min(4, minimum)
-            self._minSize = QtCore.QSize(base, round(base * ratio))
-            if minimum == width:
-                self._minSize.transpose()
+        minimum = min(width, height)
+        maximum = max(width, height)
+        ratio = maximum / minimum
+        base = min(4, minimum)
+        self._minSize = QtCore.QSize(base, round(base * ratio))
+        if minimum == width:
+            self._minSize.transpose()
 
         movie.jumpToFrame(cf)
         if state == movie.MovieState.Running:
