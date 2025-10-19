@@ -15,6 +15,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pixmatch import ImageMatcher, ImageMatch, NewGroup, NewMatch, Finished, ZipPath
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageViewPane, SelectionState
+from pixmatch.utils import human_bytes
 
 ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
 
@@ -665,6 +666,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if not is_paused:
             self.processor.pause()
 
+        file_size_deleted = 0
+        file_count_deleted = 0
+        file_count_ignored = 0
+        failed_file_deletes = []
+
         for file, set_state in self.file_states.items():
             if set_state not in states:
                 continue
@@ -672,17 +678,26 @@ class MainWindow(QtWidgets.QMainWindow):
             if set_state == SelectionState.DELETE:
                 # TODO: This is just for testing:
                 logger.info(f"Deleting {file}")
-                # Path(file.path).unlink()
-                self.processor.remove(file)
+                path = Path(file.path)
+                try:
+                    file_size_deleted += path.stat().st_size
+                    path.unlink()
+                except PermissionError:
+                    logger.info(f"Failed to delete {file}, it is in use!")
+                    failed_file_deletes.append(file)
+                else:
+                    self.processor.remove(file)
+                    file_count_deleted += 1
             elif set_state == SelectionState.IGNORE:
                 self.processor.remove(file)
+                file_count_ignored += 1
             elif set_state == SelectionState.KEEP:
                 pass
 
         self.file_states = {
             k: v
             for k, v in self.file_states.items()
-            if v not in states
+            if v not in states or k in failed_file_deletes
         }
 
         if self.current_page > self.last_page:
@@ -692,3 +707,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_group_list()
         if not is_paused:
             self.processor.resume()
+
+        popup_text = ""
+
+        if file_count_deleted:
+            popup_text += f"Deleted {file_count_deleted} files for a savings of {human_bytes(file_size_deleted)}.\n"
+
+        if file_count_ignored:
+            popup_text += f"Removed {file_count_ignored} from matching.\n"
+
+        dlg = QtWidgets.QMessageBox(self)
+        dlg.setWindowTitle("Result")
+        dlg.setText(popup_text)
+        dlg.exec()
