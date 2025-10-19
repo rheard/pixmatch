@@ -232,6 +232,7 @@ class ScaledLabel(QtWidgets.QLabel):
         super().clear()
         self.orig_pixmap = None
         if self.orig_movie:
+            self.orig_movie.device().close()
             self.orig_movie.stop()
             self.orig_movie.deleteLater()
             self.orig_movie = None
