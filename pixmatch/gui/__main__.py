@@ -22,7 +22,10 @@ if __name__ == "__main__":
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format='%(module)s::%(funcName)s::%(lineno)d %(levelname)s %(asctime)s - %(message)s',
+    )
 
     if platform.system() == "Windows":
         # Need to tell Windows to not use the Python app icon and use the Window icon isntead...
