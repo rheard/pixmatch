@@ -522,9 +522,6 @@ class DuplicateGroupList(QtWidgets.QWidget):
             row.setParent(None)
             row.deleteLater()
         self._rows.clear()
-
-    def _on_tile_state_changed(self, path: str, state: SelectionState) -> None:
-        self.groupTileStateChanged.emit(path, state)
 # endregion
 
 
