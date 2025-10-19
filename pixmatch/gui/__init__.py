@@ -556,6 +556,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 if set_state:
                     tile.state = set_state
 
+        self.duplicate_group_list.update_page_indicator(self.current_page + 1, self.last_page + 1)
+
     def on_match_state_changed(self, path: ZipPath, state):
         self.file_states[path] = state
 
