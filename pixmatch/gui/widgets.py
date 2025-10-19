@@ -325,7 +325,7 @@ class ThumbnailTile(QtWidgets.QFrame):
             return
         self._state = state
         self._apply_state_style()
-        self.stateChanged.emit(self._path, self._state)
+        self.stateChanged.emit(str(self._path), self._state)
 
     def cycle_state(self) -> None:
         """Advance KEEP → DELETE → IGNORE → KEEP."""
