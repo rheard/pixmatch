@@ -98,11 +98,11 @@ class ImageViewPane(QtWidgets.QWidget):
         self.status.setContentsMargins(NO_MARGIN)
         self.status.setObjectName("imageStatus")
         self.status.setMaximumHeight(16)
-        # self.status.setStyleSheet("""
-        #     QLabel#imageStatus {
-        #         font-size: 14px;
-        #     }
-        # """)
+        self.status.setStyleSheet("""
+            QLabel#imageStatus {
+                font-weight: bold;
+            }
+        """)
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(NO_MARGIN)
