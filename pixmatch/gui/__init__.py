@@ -4,6 +4,7 @@
 # TODO: If a folder is added, re-enable processing
 # TODO: Disable folder selection controls while processing
 # TODO: Context menu for thumbnails!
+# TODO: Show animated webp files as gifs!
 
 import logging
 
@@ -30,7 +31,8 @@ def project_version() -> str:
 
 
 class WorkerSignals(QtCore.QObject):
-    """Signals from a running worker thread.
+    """
+    Signals from a running worker thread.
 
     finished
         No data
@@ -657,6 +659,8 @@ class MainWindow(QtWidgets.QMainWindow):
         sb.addPermanentWidget(self.count_label)
 
     def process_file_states(self, states=None):
+        self.image_view_area.clear()
+
         if not states:
             states = {SelectionState.DELETE, SelectionState.IGNORE}
 
@@ -716,7 +720,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if file_count_ignored:
             popup_text += f"Removed {file_count_ignored} from matching.\n"
 
-        dlg = QtWidgets.QMessageBox(self)
-        dlg.setWindowTitle("Result")
-        dlg.setText(popup_text)
-        dlg.exec()
+        if popup_text:
+            dlg = QtWidgets.QMessageBox(self)
+            dlg.setWindowTitle("Result")
+            dlg.setText(popup_text)
+            dlg.exec()
