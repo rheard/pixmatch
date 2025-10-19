@@ -3,6 +3,7 @@
 # TODO: If a folder is unselected, remove all relevant file paths
 # TODO: If a folder is added, re-enable processing
 # TODO: Disable folder selection controls while processing
+# TODO: Context menu for thumbnails!
 
 import logging
 
