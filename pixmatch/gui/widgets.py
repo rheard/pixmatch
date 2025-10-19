@@ -122,6 +122,7 @@ class ImageViewPane(QtWidgets.QWidget):
         self.update()
 
     def clear(self):
+        """Clear and reset the current object, and the two sub-objects"""
         existing_movie = self.raw_label.movie()
         if existing_movie:
             existing_movie.stop()
@@ -138,7 +139,9 @@ class ImageViewPane(QtWidgets.QWidget):
         file_size = modified = None
         self.clear()
         if path.is_gif:
+            # We're setting a movie...
             if path.subpath:
+                # Need to load movie from a zipfile
                 with ZipFile(path.path) as zf:
                     st = zf.getinfo(path.subpath)
                     modified = st.date_time
@@ -151,18 +154,21 @@ class ImageViewPane(QtWidgets.QWidget):
                     movie.setFormat(b'gif')
                     movie.setDevice(self._buffer)
             else:
-                movie = QtGui.QMovie(path.path)
+                # Basic movie path
+                movie = QtGui.QMovie(str(path.path))
+
             object_size = movie_size(movie)
 
             if self.stack.currentIndex() == 0:
                 self.scaled.setMovie(movie)
             else:
                 self.raw_label.setMovie(movie)
-                self.raw_label.resize(object_size)
+
             movie.start()
-            self.update()
         else:
+            # We're setting an image...
             if path.subpath:
+                # Need to load image from a zipfile
                 with ZipFile(path.path) as zf:
                     st = zf.getinfo(path.subpath)
                     modified = st.date_time
@@ -170,16 +176,22 @@ class ImageViewPane(QtWidgets.QWidget):
                     pixmap = QtGui.QPixmap()
                     pixmap.loadFromData(zf.read(path.subpath))
             else:
+                # Basic image path
                 pixmap = QtGui.QPixmap(str(path.path))
+
             object_size = pixmap.size()
 
             if self.stack.currentIndex() == 0:
                 self.scaled.setPixmap(pixmap)
             else:
                 self.raw_label.setPixmap(pixmap)
-                self.raw_label.resize(object_size)
-                self.update()
 
+        if self.stack.currentIndex() == 1:
+            self.raw_label.resize(object_size)
+
+        self.update()
+
+        # region Update status text
         if not path.subpath:
             path = Path(path.path)
             st = path.stat()
@@ -194,6 +206,7 @@ class ImageViewPane(QtWidgets.QWidget):
             f"- {modified}"
             f")"
         )
+        # endregion
 
 
 class ScaledLabel(QtWidgets.QLabel):

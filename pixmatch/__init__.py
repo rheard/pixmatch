@@ -1,9 +1,6 @@
-# TODO: Add rotations!
-
 import hashlib
 import logging
 import os
-import time
 
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -44,19 +41,19 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
     if strength >= 9:
         return 16, 4    # 256-bit hash, strict
     elif strength >= 8:
-        return 14, 4     # 64-bit hash, balanced
+        return 14, 4
     elif strength >= 7:
-        return 13, 4     # 64-bit hash, balanced
+        return 13, 4
     elif strength >= 6:
-        return 12, 4     # 64-bit hash, balanced
+        return 12, 4
     elif strength >= 5:
-        return 10, 4     # 64-bit hash, balanced
+        return 10, 4
     elif strength >= 4:
-        return 8, 4     # 64-bit hash, balanced
+        return 8, 4
     elif strength >= 2:
-        return 7, 3     # 64-bit hash, balanced
+        return 7, 3
     else:
-        return 6, 3     # same bits, slightly blurrier pre-DCT
+        return 6, 3
 
 
 def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
