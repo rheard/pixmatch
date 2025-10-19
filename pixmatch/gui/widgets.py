@@ -196,12 +196,12 @@ class ImageViewPane(QtWidgets.QWidget):
             path = Path(path.path)
             st = path.stat()
             modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime('%m/%d/%Y')
-            file_size = human_bytes(st.st_size)
+            file_size = st.st_size
         elif modified:
             modified = f"{modified[1]}/{modified[2]}/{modified[0]}"
         self.status.setText(
             f"{path.absolute()} ("
-            f"{file_size} "
+            f"{human_bytes(file_size)} "
             f"- {object_size.width()},{object_size.height()}px "
             f"- {modified}"
             f")"
