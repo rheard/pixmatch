@@ -263,6 +263,10 @@ class ImageMatcher:
                         tp.apply_async(
                             _process_image,
                             args=(f, ),
+                            kwds={
+                                'strength': self.strength,
+                                'exact_match': self.exact_match,
+                            },
                             callback=self._process_image_callback,
                             error_callback=self._process_image_error_callback,
                         )
