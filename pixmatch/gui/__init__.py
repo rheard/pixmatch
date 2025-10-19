@@ -3,6 +3,7 @@
 
 import logging
 
+from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -14,6 +15,13 @@ from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageVi
 ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
 
 logger = logging.getLogger(__name__)
+
+
+def project_version() -> str:
+    try:
+        return version("pixmatch")         # e.g. "myapp"
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
 
 
 class WorkerSignals(QtCore.QObject):
@@ -78,7 +86,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self, start_paths=None):
         super().__init__()
-        self.setWindowTitle("PixMatch — MVP GUI")
+        self.setWindowTitle(f"PixMatch v{project_version()}")
         self.resize(1200, 800)
 
         # State
