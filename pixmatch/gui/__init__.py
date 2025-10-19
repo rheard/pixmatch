@@ -9,6 +9,7 @@ from pixmatch import ImageMatcher, ImageMatch, NewGroup, NewMatch, Finished
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageViewPane, SelectionState
 
+ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
 
 
 class WorkerSignals(QtCore.QObject):
@@ -83,7 +84,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.threadpool = QtCore.QThreadPool()
         self._gui_paused = False
 
-        # UI skeleton
+        # UI build
         self.build_menubar()
         self.build_central()
         self.build_statusbar()
@@ -91,7 +92,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for start_path in start_paths or []:
             self.selected_file_path_display.addItem(str(start_path))
 
-    # ----- UI builders -----------------------------------------------------
+        self.setWindowIcon(QtGui.QIcon(QtGui.QPixmap(ICON_PATH)))
 
     def build_menubar(self) -> None:
         """Creates the top menu bar"""

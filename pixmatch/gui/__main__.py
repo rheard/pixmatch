@@ -1,5 +1,6 @@
 import argparse
 import logging
+import platform
 
 from pathlib import Path
 
@@ -22,6 +23,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    if platform.system() == "Windows":
+        # Need to tell Windows to not use the Python app icon and use the Window icon isntead...
+        #    I'm not sure on the specifics but calling this method with any string seems to do the trick....
+        # https://stackoverflow.com/questions/1551605
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('company.app.1')
 
     app = QtWidgets.QApplication([])
     # Basic stylesheet for subtle polish without complexity.
