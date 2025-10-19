@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum, auto
+from functools import cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 from zipfile import ZipFile
@@ -9,6 +10,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from pixmatch import ZipPath
 from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
 from pixmatch.utils import human_bytes
+
+ZIP_ICON_PATH = Path(__file__).resolve().parent / 'zip.png'
 
 
 class SelectionState(Enum):
@@ -310,6 +313,15 @@ class ScaledLabel(QtWidgets.QLabel):
 
 
 # region Thumbnail tile panel
+@cache
+def get_overlay_icon(height, width):
+    return QtGui.QPixmap(ZIP_ICON_PATH).scaled(
+        int(height), int(width),
+        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        QtCore.Qt.TransformationMode.FastTransformation,
+    )
+
+
 class ThumbnailTile(QtWidgets.QFrame):
     """
     Clickable thumbnail tile that cycles between KEEP → DELETE → IGNORE.
@@ -336,7 +348,15 @@ class ThumbnailTile(QtWidgets.QFrame):
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(NO_MARGIN)
         lay.setSpacing(0)
-        lay.addWidget(self._image, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self._image)
+
+        if path.subpath:
+            _overlay_icon = QtWidgets.QLabel(self._image)  # child of the tile so it floats over the image
+            _overlay_icon.setObjectName("LockOverlay")
+            _overlay_icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            _overlay_icon.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            _overlay_icon.setFixedSize(thumb_size, thumb_size)  # small badge; adjust later if you want
+            _overlay_icon.setPixmap(get_overlay_icon(thumb_size / 1.5, thumb_size / 1.5))
 
         self._apply_state_style()
 
