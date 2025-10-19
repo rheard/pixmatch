@@ -1,5 +1,8 @@
 # TODO: Confirm to close
 # TODO: Validate that users don't select overlapping paths...
+# TODO: If a folder is unselected, remove all relevant file paths
+# TODO: If a folder is added, re-enable processing
+# TODO: Disable folder selection controls while processing
 
 import logging
 
