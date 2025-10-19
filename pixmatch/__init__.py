@@ -30,10 +30,20 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
     strength = max(0, min(10, strength))
     if strength >= 9:
         return 16, 4    # 256-bit hash, strict
+    elif strength >= 8:
+        return 14, 4     # 64-bit hash, balanced
+    elif strength >= 7:
+        return 13, 4     # 64-bit hash, balanced
+    elif strength >= 6:
+        return 12, 4     # 64-bit hash, balanced
+    elif strength >= 5:
+        return 10, 4     # 64-bit hash, balanced
     elif strength >= 4:
         return 8, 4     # 64-bit hash, balanced
+    elif strength >= 2:
+        return 7, 3     # 64-bit hash, balanced
     else:
-        return 8, 3     # same bits, slightly blurrier pre-DCT
+        return 6, 3     # same bits, slightly blurrier pre-DCT
 
 
 def calculate_hashes(file_path, strength=5, exact_match=False):
