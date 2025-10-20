@@ -53,8 +53,8 @@ def _load_pixmap(path: ZipPath, thumb_size: int) -> QtGui.QPixmap:
                 p.drawRect(x, y, 16, 16)
         p.end()
     return pm.scaled(thumb_size, thumb_size,
-                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                     QtCore.Qt.TransformationMode.SmoothTransformation)
+                     QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                     QtCore.Qt.TransformationMode.FastTransformation)
 
 
 def movie_size(movie: QtGui.QMovie):
