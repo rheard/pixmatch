@@ -38,18 +38,20 @@ class ZipPath:
 def phash_params_for_strength(strength: int) -> tuple[int, int]:
     # TODO: This sucks.
     strength = max(0, min(10, strength))
-    if strength >= 9:
+    if strength >= 10:
         return 16, 4    # 256-bit hash, strict
     elif strength >= 8:
-        return 14, 4
+        return 15, 4
     elif strength >= 7:
         return 13, 4
     elif strength >= 6:
-        return 12, 4
+        return 11, 4
     elif strength >= 5:
-        return 10, 4
+        return 9, 4
     elif strength >= 4:
         return 8, 4
+    elif strength >= 3:
+        return 8, 3
     elif strength >= 2:
         return 7, 3
     else:
