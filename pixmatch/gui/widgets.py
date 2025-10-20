@@ -535,12 +535,16 @@ class DuplicateGroupList(QtWidgets.QWidget):
 
         # Status bar
         _status = QtWidgets.QHBoxLayout()
-        self.left_arrow = QtWidgets.QPushButton("<")
+        self.first_page = QtWidgets.QPushButton("<<")
+        self.page_down = QtWidgets.QPushButton("<")
         self.page_indicator = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.right_arrow = QtWidgets.QPushButton(">")
-        _status.addWidget(self.left_arrow)
+        self.page_up = QtWidgets.QPushButton(">")
+        self.last_page = QtWidgets.QPushButton(">>")
+        _status.addWidget(self.first_page)
+        _status.addWidget(self.page_down)
         _status.addWidget(self.page_indicator)
-        _status.addWidget(self.right_arrow)
+        _status.addWidget(self.page_up)
+        _status.addWidget(self.last_page)
         outer.addLayout(_status)
 
         self.update_page_indicator(1, 1)

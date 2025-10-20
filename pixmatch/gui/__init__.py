@@ -401,8 +401,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duplicate_group_list = DuplicateGroupList(sizePolicy=MAX_SIZE_POLICY)
         self.duplicate_group_list.groupTileStateChanged.connect(self.on_match_state_changed)
         self.duplicate_group_list.groupTileHovered.connect(self.image_view_area.set_image)
-        self.duplicate_group_list.left_arrow.pressed.connect(self.on_page_down)
-        self.duplicate_group_list.right_arrow.pressed.connect(self.on_page_up)
+        self.duplicate_group_list.page_down.pressed.connect(self.on_page_down)
+        self.duplicate_group_list.page_up.pressed.connect(self.on_page_up)
+        self.duplicate_group_list.first_page.pressed.connect(self.on_page_first)
+        self.duplicate_group_list.last_page.pressed.connect(self.on_page_last)
         outer_splitter.addWidget(self.duplicate_group_list)
         outer_splitter.addWidget(inner_splitter)
 
@@ -545,6 +547,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.current_page += 1
 
         self.update_group_list()
+
+    def on_page_first(self):
+        if self.current_page != 0:
+            self.current_page = 0
+            self.update_group_list()
+
+    def on_page_last(self):
+        last_page = self.last_page
+        if self.current_page != last_page:
+            self.current_page = last_page
+            self.update_group_list()
 
     def update_group_list(self):
         row_count = self.duplicate_group_list._max_rows
