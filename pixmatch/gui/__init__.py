@@ -533,6 +533,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
     def on_page_down(self):
+        if self.last_page == 0:
+            # Theres only one page....
+            return
+
         if self.current_page == 0:
             self.current_page = self.last_page
         else:
@@ -541,6 +545,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_group_list()
 
     def on_page_up(self):
+        if self.last_page == 0:
+            # Theres only one page....
+            return
+
         if self.current_page == self.last_page:
             self.current_page = 0
         else:
