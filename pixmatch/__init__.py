@@ -1,3 +1,5 @@
+# TODO: Before release, I NEED better path management when new paths are added/removed!
+
 import hashlib
 import logging
 import os
