@@ -69,6 +69,15 @@ def movie_size(movie: QtGui.QMovie):
     return QtCore.QSize(width, height)
 
 
+def movie_uncompressed_filesize(movie: QtGui.QMovie):
+    file_size = 0
+    for i in range(movie.frameCount()):
+        movie.jumpToNextFrame()
+        img = movie.currentImage()
+        file_size += img.sizeInBytes()
+    return file_size
+
+
 class ImageViewPane(QtWidgets.QWidget):
     """Container with a stacked image viewer and a bottom overlay status label."""
     def __init__(self, parent=None):
@@ -139,7 +148,8 @@ class ImageViewPane(QtWidgets.QWidget):
             return
 
         self.current_path = path
-        file_size = modified = uncompressed_size = None
+        file_size = modified = None
+        extra = ''
         self.clear()
         if path.is_gif:
             # We're setting a movie...
@@ -167,6 +177,17 @@ class ImageViewPane(QtWidgets.QWidget):
             else:
                 self.raw_label.setMovie(movie)
 
+            uncompressed_size = movie_uncompressed_filesize(movie)
+
+            # WEBP files which aren't animated will appear as movies with a single frame
+            #   Thats boring. For the purposes of the statusbar, just treat them as images
+            # TODO: Gee, that makes me wonder...
+            #   could any image be treated as a movie and we could do away with this whole pixmap or movie thing?
+            #   Worth investigating when I have more time...
+            if movie.frameCount() > 1:
+                extra = f'({human_bytes(uncompressed_size)}, {movie.frameCount()}) '
+            else:
+                extra = f'({human_bytes(uncompressed_size)}) '
             movie.start()
         else:
             # We're setting an image...
@@ -182,7 +203,7 @@ class ImageViewPane(QtWidgets.QWidget):
                 # Basic image path
                 pixmap = QtGui.QPixmap(str(path.path))
 
-            uncompressed_size = pixmap.toImage().sizeInBytes()
+            extra = f'({human_bytes(pixmap.toImage().sizeInBytes())}) '
             object_size = pixmap.size()
 
             if self.stack.currentIndex() == 0:
@@ -205,7 +226,7 @@ class ImageViewPane(QtWidgets.QWidget):
             modified = f"{modified[1]}/{modified[2]}/{modified[0]}"
         self.status.setText(
             f"{path.absolute()} ("
-            f"{human_bytes(file_size)} {f'({human_bytes(uncompressed_size)}) ' if uncompressed_size else ''}"
+            f"{human_bytes(file_size)} {extra}"
             f"- {object_size.width()},{object_size.height()}px "
             f"- {modified}"
             f")"
