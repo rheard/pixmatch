@@ -6,10 +6,11 @@
 # TODO: Disable folder selection controls while processing
 # TODO: Context menu for thumbnails!
 # TODO: In addition to renaming/moving files as an option, add "replace with symlink" as an option
-# TODO: Disable or remove missing action bar items
+# TODO: Update labels on redraw!
 
 
 import logging
+import sys
 
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
@@ -122,9 +123,10 @@ class MainWindow(QtWidgets.QMainWindow):
         menu = self.menuBar()
 
         # region File menu
-        load_project = QtGui.QAction("Load Project...", self)
-        save_project = QtGui.QAction("Save Project...", self)
+        load_project = QtGui.QAction("Load Project...", self, enabled=False)
+        save_project = QtGui.QAction("Save Project...", self, enabled=False)
         exit_project = QtGui.QAction("Exit", self)
+        exit_project.triggered.connect(self.on_exit)
 
         file_menu = menu.addMenu("&File")
         file_menu.addAction(load_project)
@@ -134,13 +136,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # endregion
 
         # region Edit menu
-        mark_delete = QtGui.QAction("Delete", self)
-        mark_ignore = QtGui.QAction("Ignore", self)
-        mark_ignore_group = QtGui.QAction("Ignore Group", self)
-        mark_ignore_folder = QtGui.QAction("Ignore Folder", self)
-        mark_rename = QtGui.QAction("Rename this file...", self)
-        mark_move = QtGui.QAction("Move this file...", self)
-        unmark = QtGui.QAction("Un-select", self)
+        mark_delete = QtGui.QAction("Delete", self, enabled=False)
+        mark_ignore = QtGui.QAction("Ignore", self, enabled=False)
+        mark_ignore_group = QtGui.QAction("Ignore Group", self, enabled=False)
+        mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
+        mark_rename = QtGui.QAction("Rename this file...", self, enabled=False)
+        mark_move = QtGui.QAction("Move this file...", self, enabled=False)
+        mark_symlink = QtGui.QAction("Symlink this file...", self, enabled=False)
+        unmark = QtGui.QAction("Un-select", self, enabled=False)
 
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(mark_delete)
@@ -150,13 +153,16 @@ class MainWindow(QtWidgets.QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction(mark_rename)
         edit_menu.addAction(mark_move)
+        edit_menu.addAction(mark_symlink)
         edit_menu.addSeparator()
         edit_menu.addAction(unmark)
         # endregion
 
         # region View menu
         page_next = QtGui.QAction("Next page", self)
+        page_next.triggered.connect(self.on_page_up)
         page_back = QtGui.QAction("Previous page", self)
+        page_back.triggered.connect(self.on_page_down)
         self.preview_resized = QtGui.QAction("Preview resized", self, checked=True, checkable=True)
         preview_full_size = QtGui.QAction("Preview full size", self, checkable=True)
 
@@ -187,8 +193,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # endregion
 
         # region Actions menu
-        run_move = QtGui.QAction("Move", self)
-        run_move.setEnabled(False)  # TODO:
+        run_move = QtGui.QAction("Move", self, enabled=False)
         run_delete = QtGui.QAction("Delete", self)
         run_delete.triggered.connect(self.on_delete)
         run_ignore = QtGui.QAction("Save ignored pictures", self)
@@ -201,9 +206,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # endregion
 
         # region Options menu
-        option_hidden_folders = QtGui.QAction("Show hidden folders", self, checkable=True)
-        option_subfolders = QtGui.QAction("Include subfolders", self, checkable=True)
-        option_rotations = QtGui.QAction("Scan for rotations", self, checkable=True)
+        option_hidden_folders = QtGui.QAction("Show hidden folders", self, checkable=True, enabled=False)
+        option_subfolders = QtGui.QAction("Include subfolders", self, checkable=True, checked=True, enabled=False)
+        option_rotations = QtGui.QAction("Scan for rotations", self, checkable=True, checked=True, enabled=False)
 
         # TODO: I'm not sure what these two do... I'm willing to add them if someone needs them but I don't.
         # ... = QtGui.QAction("Between folders only", self)
@@ -535,7 +540,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_groups_label(len(self.processor.matches))
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
-    def on_page_down(self):
+    def on_exit(self, *_):
+        # TODO: Pop warning dialog if there are ANY matches in the
+        sys.exit()
+
+    def on_page_down(self, *_):
         if self.last_page == 0:
             # Theres only one page....
             return
@@ -547,7 +556,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.update_group_list()
 
-    def on_page_up(self):
+    def on_page_up(self, *_):
         if self.last_page == 0:
             # Theres only one page....
             return
