@@ -309,9 +309,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._timer_label = QtWidgets.QLabel("00:00:00", alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
         self._elapsed_secs = 0
-        self._timer = QtCore.QTimer(self)
-        self._timer.setInterval(1000)  # 1s ticks
-        self._timer.timeout.connect(self._on_timer_tick)
+        self._run_timer = QtCore.QTimer(self)
+        self._run_timer.setInterval(1000)  # 1s ticks
+        self._run_timer.timeout.connect(self._on_run_timer_tick)
 
         self._label_timer = QtCore.QTimer(self)
         self._label_timer.setInterval(50)  # 1s ticks
@@ -425,7 +425,7 @@ class MainWindow(QtWidgets.QMainWindow):
         hbox.addWidget(outer_splitter)
         self.setCentralWidget(central_widget)
 
-    def _on_timer_tick(self):
+    def _on_run_timer_tick(self):
         if not self.processor:
             return
 
@@ -458,7 +458,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self.processor.pause()
-        self._timer.stop()
+        self._run_timer.stop()
         self._label_timer.stop()
 
     def on_start(self, e):
@@ -484,7 +484,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.threadpool.start(self.thread)
             self.pause_btn.setEnabled(True)
             self._elapsed_secs = 0
-            self._timer.start()
+            self._run_timer.start()
             self._label_timer.start()
             # TODO: Disable strength slider, re-enable only once finished or stopped
             return
@@ -492,7 +492,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.processor.is_paused() and not self.processor.is_finished():
             self.processor.resume()
             self.pause_btn.setEnabled(True)
-            self._timer.start()
+            self._run_timer.start()
             self._label_timer.start()
             return
 
@@ -502,7 +502,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_finish(self):
         self.pause_btn.setEnabled(True)
         self.stop_btn.setChecked(False)
-        self._timer.stop()
+        self._run_timer.stop()
         self._label_timer.stop()
         self.thread = None
 
