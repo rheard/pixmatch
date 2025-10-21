@@ -317,6 +317,7 @@ class ImageMatcher:
 
     def run(self, paths: list[str | Path]):
         # TODO: Verify none of the paths overlap
+        # TODO: Verify none of the dirs have been deleted after we started
 
         self._not_paused.set()
         self._finished.clear()
