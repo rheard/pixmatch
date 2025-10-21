@@ -6,7 +6,6 @@
 # TODO: Disable folder selection controls while processing
 # TODO: Context menu for thumbnails!
 # TODO: In addition to renaming/moving files as an option, add "replace with symlink" as an option
-# TODO: Update labels on redraw!
 
 
 import logging
@@ -67,7 +66,7 @@ class ProcessorThread(QtCore.QRunnable):
 
         # timer lives on the GUI thread; it polls the library queue
         self._poller = QtCore.QTimer()
-        self._poller.setInterval(20)
+        self._poller.setInterval(250)
         self._poller.timeout.connect(self._drain_events)
         self._poller.start()
 
@@ -299,12 +298,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         labels = QtWidgets.QVBoxLayout()
         labels.setContentsMargins(NO_MARGIN)
-        self._remaining_files_label = QtWidgets.QLabel("Remaining files....0")
-        self._loaded_pictures_label = QtWidgets.QLabel("Loaded pictures..0")
-        self._to_compare_label = QtWidgets.QLabel("To compare.......0")
-        self._dup_pictures_label = QtWidgets.QLabel("Duplicate pictures..0")
+        self._remaining_files_label = QtWidgets.QLabel()
+        self.set_remaining_files_label(0)
+        self._loaded_pictures_label = QtWidgets.QLabel()
+        self.set_loaded_pictures_label(0)
+        self._dup_pictures_label = QtWidgets.QLabel()
         self.set_duplicate_images_label(0)
-        self._dup_groups_label = QtWidgets.QLabel("Duplicate groups..0")
+        self._dup_groups_label = QtWidgets.QLabel()
         self.set_duplicate_groups_label(0)
 
         self._timer_label = QtWidgets.QLabel("00:00:00", alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
@@ -313,10 +313,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._timer.setInterval(1000)  # 1s ticks
         self._timer.timeout.connect(self._on_timer_tick)
 
+        self._label_timer = QtCore.QTimer(self)
+        self._label_timer.setInterval(50)  # 1s ticks
+        self._label_timer.timeout.connect(self._on_labels_tick)
+
         self._progress_bar = QtWidgets.QProgressBar(value=50, textVisible=False)
         labels.addWidget(self._remaining_files_label)
         labels.addWidget(self._loaded_pictures_label)
-        labels.addWidget(self._to_compare_label)
         labels.addWidget(self._dup_pictures_label)
         labels.addWidget(self._dup_groups_label)
         labels.addWidget(self._timer_label)
@@ -433,6 +436,12 @@ class MainWindow(QtWidgets.QMainWindow):
             m, s = divmod(rem, 60)
             self._timer_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
 
+    def _on_labels_tick(self):
+        if not self.processor:
+            return
+
+        self.update_labels()
+
     def on_precision_adjust(self, e):
         """The precision slider has been adjusted, so update the hash checkbox"""
         if e != 10:
@@ -450,6 +459,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.processor.pause()
         self._timer.stop()
+        self._label_timer.stop()
 
     def on_start(self, e):
         if not e:
@@ -475,6 +485,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pause_btn.setEnabled(True)
             self._elapsed_secs = 0
             self._timer.start()
+            self._label_timer.start()
             # TODO: Disable strength slider, re-enable only once finished or stopped
             return
 
@@ -482,6 +493,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.processor.resume()
             self.pause_btn.setEnabled(True)
             self._timer.start()
+            self._label_timer.start()
             return
 
         # TODO: Should probably pop up a warning box? Need to clear the processor, all labels and the matches list
@@ -491,6 +503,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pause_btn.setEnabled(True)
         self.stop_btn.setChecked(False)
         self._timer.stop()
+        self._label_timer.stop()
         self.thread = None
 
     def on_delete(self, *_):
@@ -536,12 +549,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def set_duplicate_images_label(self, duplicate_images):
         self._dup_pictures_label.setText(f"Duplicate pictures..{duplicate_images}")
 
+    def set_remaining_files_label(self, remaining_files):
+        self._remaining_files_label.setText(f"Remaining files....{remaining_files}")
+
+    def set_loaded_pictures_label(self, loaded_pictures):
+        self._loaded_pictures_label.setText(f"Loaded pictures..{loaded_pictures}")
+
     def update_labels(self):
+        if not self.processor:
+            return
+
+        self._progress_bar.setMaximum(self.processor.found_images)
+        self._progress_bar.setValue(self.processor.processed_images)
+        self.set_remaining_files_label(self.processor.found_images - self.processor.processed_images)
+        self.set_loaded_pictures_label(self.processor.processed_images)
         self.set_duplicate_groups_label(len(self.processor.matches))
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
     def on_exit(self, *_):
-        # TODO: Pop warning dialog if there are ANY matches in the
+        # TODO: Pop warning dialog if there are ANY matches in the thumbnail list
+        if self.processor and not self.processor.is_finished():
+            self.processor.finish()
+
         sys.exit()
 
     def on_page_down(self, *_):
