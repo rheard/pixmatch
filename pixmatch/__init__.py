@@ -354,7 +354,10 @@ class ImageMatcher:
                         )
 
             tp.close()
-            tp.join()
 
-        self._finished.set()
-        self.events.put(Finished())
+            if self.is_finished():
+                tp.join()
+
+        if not self.is_finished():
+            self._finished.set()
+            self.events.put(Finished())
