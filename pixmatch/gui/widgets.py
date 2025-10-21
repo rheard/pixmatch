@@ -164,7 +164,6 @@ class ImageViewPane(QtWidgets.QWidget):
                     self._buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly)
 
                     movie = QtGui.QMovie()
-                    movie.setFormat(b'gif')
                     movie.setDevice(self._buffer)
             else:
                 # Basic movie path

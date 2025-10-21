@@ -13,6 +13,7 @@ from typing import Union
 from zipfile import ZipFile
 
 import imagehash
+import numpy as np
 
 from PIL import Image
 
@@ -30,8 +31,9 @@ class ZipPath:
 
     @property
     def is_gif(self) -> bool:
-        return (not self.subpath and Path(self.path).suffix.lower() == '.gif') \
-            or (self.subpath and self.subpath.lower().endswith('.gif'))
+        movie_extensions = {'.gif', '.webp'}
+        return (not self.subpath and Path(self.path).suffix.lower() in movie_extensions) \
+            or (self.subpath and self.subpath[-4:].lower() in movie_extensions)
 
     def absolute(self):
         return ZipPath(str(self.path_obj.absolute()), self.subpath)
@@ -84,9 +86,32 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
         return [hasher.hexdigest()]
 
     hash_size, highfreq_factor = phash_params_for_strength(strength)
-    with Image.open(f) as im:
+    with (Image.open(f) as im):
         if is_gif:
-            return [imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)]
+            initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
+            # This is going to be a bit confusing but basically, imagehash produces weird hashes for some gifs
+            #   because some gifs have bad first frames consisting of nothing or only a single color...
+            # To deal with that I'm looking for these bad hashes here and if its one, we advance to the next frame
+            #   and use THAT for imagehash instead.
+            # The ones we need to be on the lookout for are:
+            #   1. The hash is all 1111...
+            #   2. The hash is all 0000...
+            #   3. The hash is of the form 100000...
+            val = initial_hash.hash[0][0]
+            while all(all(x == val for x in r) for r in initial_hash.hash) \
+                    or all(all(x == np.False_ or (x_i == 0 and r_i == 0) for x_i, x in enumerate(r))
+                           for r_i, r in enumerate(initial_hash.hash)):
+                try:
+                    im.seek(im.tell() + 1)
+                except EOFError:
+                    break
+                else:
+                    initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
+                    val = initial_hash.hash[0][0]
+
+            # For GIFs we'll look for mirrored versions but thats it
+            flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            return [initial_hash, imagehash.phash(flipped_h_image, hash_size=hash_size, highfreq_factor=highfreq_factor)]
 
         flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         flipped_v_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
@@ -99,14 +124,14 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
 def _process_image(path: str | Path, strength=5, exact_match=False):
     path = Path(path)
     if path.suffix.lower() != '.zip':
-        return path, calculate_hashes(path, is_gif=path.suffix.lower() == ".gif",
+        return path, calculate_hashes(path, is_gif=path.suffix.lower() in {".gif", ".webp"},
                                       strength=strength, exact_match=exact_match)
 
     results = dict()
     with ZipFile(path) as zf:
         for f in zf.filelist:
             with zf.open(f) as zipped_file:
-                results[f.filename] = calculate_hashes(zipped_file, is_gif=f.filename.lower().endswith('.gif'),
+                results[f.filename] = calculate_hashes(zipped_file, is_gif=f.filename[-4:].lower() in {".gif", ".webp"},
                                                        strength=strength, exact_match=exact_match)
 
     return path, results
