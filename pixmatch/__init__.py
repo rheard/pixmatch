@@ -1,8 +1,7 @@
-# TODO: Before release, I NEED better path management when new paths are added/removed!
-
 import hashlib
 import logging
 import os
+import time
 
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -37,6 +36,15 @@ class ZipPath:
 
     def absolute(self):
         return ZipPath(str(self.path_obj.absolute()), self.subpath)
+
+
+def _is_under(folder_abs: str, target: str | Path) -> bool:
+    """Return True if the ZipPath's real file (zp.path) is inside folder_abs."""
+    try:
+        Path(target).absolute().relative_to(Path(folder_abs).absolute())
+        return True
+    except ValueError:
+        return False
 
 
 def phash_params_for_strength(strength: int) -> tuple[int, int]:
@@ -182,16 +190,41 @@ class ImageMatcher:
 
         m = Manager()
         self.events = m.Queue()
+        self._new_paths = m.Queue()
+        self._removed_paths = set()
+        self._processed_paths = set()
         self._hashes = defaultdict(ImageMatch)
         self._reverse_hashes = dict()
 
-        self._conditional_pause = None
         self._not_paused = Event()
         self._not_paused.set()
         self._finished = Event()
         self._finished.set()
 
         self.matches = []
+
+    def add_path(self, path: str | Path):
+        path = str(Path(path).absolute())
+        self._removed_paths.discard(path)
+        self._new_paths.put(path)
+
+    def remove_path(self, folder: str | Path) -> None:
+        """
+        Mark a folder to be skipped going forward, and remove already-indexed files
+        that live under it. Pauses briefly if not already paused to keep state sane.
+        """
+        folder = str(Path(folder).absolute())
+        paused = self.conditional_pause()
+        self._removed_paths.add(folder)
+        self._processed_paths.discard(folder)
+
+        # Remove anything we've already seen under that folder
+        # (iterate over a copy because remove() mutates structures)
+        to_remove = [p for p in self._reverse_hashes.keys() if _is_under(folder, p.path)]
+        for p in to_remove:
+            self.remove(p)
+
+        self.conditional_resume(paused)
 
     @property
     def left_to_process(self):
@@ -202,13 +235,15 @@ class ImageMatcher:
         self._not_paused.clear()
 
     def conditional_pause(self):
-        self._conditional_pause = self.is_paused()
-        if not self._conditional_pause:
+        _conditional_pause = self.is_paused()
+        if not _conditional_pause:
             logger.debug('Performing conditional pause')
             self.pause()
 
-    def conditional_resume(self):
-        if not self._conditional_pause:
+        return _conditional_pause
+
+    def conditional_resume(self, was_paused):
+        if not was_paused and not self.is_finished():
             logger.debug('Performing conditional resume')
             self.resume()
 
@@ -226,10 +261,13 @@ class ImageMatcher:
         logger.debug('Performing resume')
         self._not_paused.set()
 
+    def running(self):
+        return not self.is_paused() and (not self.is_finished() or self.left_to_process)
+
     def remove(self, path):
         # Pause things while we remove things...
         logger.info('Removing %s from %s', path, self.__class__.__name__)
-        self.conditional_pause()
+        paused = self.conditional_pause()
 
         hash = self._reverse_hashes.pop(path)
         self._hashes[hash].matches.remove(path)
@@ -250,7 +288,9 @@ class ImageMatcher:
             logger.debug('Simple removal performed')
             self.duplicate_images -= 1
 
-        self.conditional_resume()
+        self.processed_images -= 1
+        self.found_images -= 1
+        self.conditional_resume(paused)
 
     def refresh_match_indexes(self, start=0):
         for match_i, match in enumerate(self.matches[start:], start=start):
@@ -264,6 +304,10 @@ class ImageMatcher:
         path: Path | str | ZipPath
         path, hashes = result
 
+        if any(_is_under(d, path.path if isinstance(path, ZipPath) else path) for d in self._removed_paths):
+            self.found_images -= 1
+            return
+
         if isinstance(hashes, dict):
             for sub_path, sub_hashes in hashes.items():
                 self._process_image_callback((ZipPath(str(path), sub_path), sub_hashes))
@@ -271,6 +315,10 @@ class ImageMatcher:
 
         if not isinstance(path, ZipPath):
             path = ZipPath(str(path), "")
+
+        if path in self._reverse_hashes:
+            self.found_images -= 1
+            return
 
         self.processed_images += 1
         for hash_ in hashes:
@@ -315,6 +363,15 @@ class ImageMatcher:
         self.processed_images += 1
         print(str(e))
 
+    def _root_stream(self):
+        # Yield any paths that come up for processing, then wait until processing is finished for any new paths
+        while not self._new_paths.empty() or self.left_to_process:
+            if self._new_paths.empty():
+                time.sleep(0.05)
+                continue
+
+            yield self._new_paths.get_nowait()
+
     def run(self, paths: list[str | Path]):
         # TODO: Verify none of the paths overlap
         # TODO: Verify none of the dirs have been deleted after we started
@@ -322,23 +379,40 @@ class ImageMatcher:
         self._not_paused.set()
         self._finished.clear()
 
+        for path in paths:
+            self.add_path(path)
+
         with Pool(self.processes) as tp:
-            for path in paths:
-                if self.is_finished():
-                    break
+            for path in self._root_stream():
+                path = Path(path)
+                if not path.is_dir():
+                    logger.warning('A path was entered that was not a directory : %s', path)
+                    continue
+
+                path = str(path.absolute())
+                if path in self._removed_paths or path in self._processed_paths:
+                    continue
 
                 for root, dirs, files in os.walk(path):
                     if self.is_finished():
                         break
+
+                    root = Path(root)
+
+                    if any(_is_under(d, root) for d in self._removed_paths):
+                        continue
 
                     for f in files:
                         self._not_paused.wait()
                         if self.is_finished():
                             break
 
-                        f = Path(os.path.join(root, f))
+                        f = root / f
 
                         if f.suffix.lower() not in self.extensions:
+                            continue
+
+                        if any(_is_under(d, f) for d in self._removed_paths):
                             continue
 
                         self.found_images += 1
@@ -353,9 +427,11 @@ class ImageMatcher:
                             error_callback=self._process_image_error_callback,
                         )
 
+                self._processed_paths.add(path)
+
             tp.close()
 
-            if self.is_finished():
+            if not self.is_finished():
                 tp.join()
 
         if not self.is_finished():

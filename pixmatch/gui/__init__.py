@@ -1,4 +1,3 @@
-# TODO: Before release, must be able to load some folders, run once, add more folders, run again
 # TODO: Confirm to close
 # TODO: Validate that users don't select overlapping paths...
 # TODO: If a folder is unselected, remove all relevant file paths
@@ -314,7 +313,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._run_timer.timeout.connect(self._on_run_timer_tick)
 
         self._label_timer = QtCore.QTimer(self)
-        self._label_timer.setInterval(50)  # 1s ticks
+        self._label_timer.setInterval(50)
         self._label_timer.timeout.connect(self._on_labels_tick)
 
         self._progress_bar = QtWidgets.QProgressBar(value=50, textVisible=False)
@@ -466,38 +465,39 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         if not self.processor:
-            # self.duplicate_group_list._clear_rows()
+            # This is the first time running!
             self.processor = ImageMatcher(
                 strength=self.precision_slider.value(),
                 exact_match=self.hash_match_chkbx.isChecked(),
             )
 
-            target_paths = [
-                self.selected_file_path_display.item(i).text()
-                for i in range(self.selected_file_path_display.count())
-            ]
-
-            self.thread = ProcessorThread(self.processor, target_paths)
-            self.thread.signals.new_group.connect(self.on_new_match_group_found)
-            self.thread.signals.new_match.connect(self.on_new_match_found)
-            self.thread.signals.finish.connect(self.on_finish)
-            self.threadpool.start(self.thread)
-            self.pause_btn.setEnabled(True)
-            self._elapsed_secs = 0
-            self._run_timer.start()
-            self._label_timer.start()
-            # TODO: Disable strength slider, re-enable only once finished or stopped
-            return
-
-        if self.processor.is_paused() and not self.processor.is_finished():
+        elif self.processor.is_paused() and not self.processor.is_finished():
             self.processor.resume()
             self.pause_btn.setEnabled(True)
             self._run_timer.start()
             self._label_timer.start()
             return
 
-        # TODO: Should probably pop up a warning box? Need to clear the processor, all labels and the matches list
-        raise NotImplementedError("Have not implemented doing a second run after a completed first run")
+        elif self.processor.running():
+            raise RuntimeError("Somehow we're trying to run when the processor appears to be running already!")
+
+        target_paths = [
+            self.selected_file_path_display.item(i).text()
+            for i in range(self.selected_file_path_display.count())
+        ]
+
+        self.thread = ProcessorThread(self.processor, target_paths)
+        self.thread.signals.new_group.connect(self.on_new_match_group_found)
+        self.thread.signals.new_match.connect(self.on_new_match_found)
+        self.thread.signals.finish.connect(self.on_finish)
+        self.threadpool.start(self.thread)
+        self.pause_btn.setEnabled(True)
+        self.precision_slider.setEnabled(False)
+        self.hash_match_chkbx.setEnabled(False)
+        self._elapsed_secs = 0
+        self._run_timer.start()
+        self._label_timer.start()
+        return
 
     def on_finish(self):
         self.pause_btn.setEnabled(True)
@@ -559,9 +559,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.processor:
             return
 
-        self._progress_bar.setMaximum(self.processor.found_images)
-        self._progress_bar.setValue(self.processor.processed_images)
-        self.set_remaining_files_label(self.processor.found_images - self.processor.processed_images)
+        if self.processor.found_images:
+            self._progress_bar.setMaximum(self.processor.found_images)
+            self._progress_bar.setValue(self.processor.processed_images)
+        else:
+            self._progress_bar.setMaximum(100)
+            self._progress_bar.setValue(0)
+
+        self.set_remaining_files_label(self.processor.left_to_process)
         self.set_loaded_pictures_label(self.processor.processed_images)
         self.set_duplicate_groups_label(len(self.processor.matches))
         self.set_duplicate_images_label(self.processor.duplicate_images)
@@ -695,12 +700,20 @@ class MainWindow(QtWidgets.QMainWindow):
         selected_indexes = self.file_system_view.selectedIndexes()
         for index in selected_indexes:
             info = self.file_system_view.model().fileInfo(index)
-            self.selected_file_path_display.addItem(info.filePath())
+            target_path = info.filePath()
+            self.selected_file_path_display.addItem(target_path)
+
+            if self.processor and self.processor.running():
+                self.processor.add_path(target_path)
 
     def file_path_out_clicked(self, _):
-        # TODO: Remove any files which part of this path
         for selected_index in self.selected_file_path_display.selectedIndexes():
-            self.selected_file_path_display.takeItem(selected_index.row())
+            selected_item = self.selected_file_path_display.takeItem(selected_index.row())
+
+            if self.processor:
+                self.processor.remove_path(selected_item.text())
+                self.update_group_list()
+                self.update_labels()
     # endregion
 
     # region Image View area (bottom-right)
