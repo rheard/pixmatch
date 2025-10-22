@@ -585,9 +585,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
     def on_exit(self, *_):
-        if self.processor and not self.processor.is_finished():
-            self.processor.finish()
-
         self.close()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
@@ -595,10 +592,15 @@ class MainWindow(QtWidgets.QMainWindow):
         Intercept window close requests (titlebar X, Cmd/Ctrl+Q, File→Exit, etc.).
         Only prompt if data is loaded.
         """
-        if self.processor and len(self.processor.matches) and not self.confirm_close():
-            # There IS data loaded and user said NO to exiting
-            event.ignore()
-            return
+        if self.processor:
+            if len(self.processor.matches) and not self.confirm_close():
+                # There IS data loaded and user said NO to exiting
+                event.ignore()
+                return
+
+            if self.processor.running():
+                self.processor.finish()
+
         event.accept()
 
     def on_page_down(self, *_):
