@@ -105,6 +105,7 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
             #   1. The hash is all 1111...
             #   2. The hash is all 0000...
             #   3. The hash is of the form 100000...
+            # TODO: This is simply not good enough. I'm still getting bad matches for gifs, tho they are extremely rare
             val = initial_hash.hash[0][0]
             while all(all(x == val for x in r) for r in initial_hash.hash) \
                     or all(all(x == np.False_ or (x_i == 0 and r_i == 0) for x_i, x in enumerate(r))
@@ -415,6 +416,7 @@ class ImageMatcher:
                         if any(_is_under(d, f) for d in self._removed_paths):
                             continue
 
+                        # TODO: This sucks (for zips at least), but I can't iterate over the dict while its changing...
                         if ZipPath(str(f), "") in self._reverse_hashes:
                             continue
 
