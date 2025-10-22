@@ -500,8 +500,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return
 
     def on_finish(self):
-        self.pause_btn.setEnabled(True)
-        self.stop_btn.setChecked(False)
+        self.stop_btn.setChecked(True)
+        self.pause_btn.setEnabled(False)
         self._run_timer.stop()
         self._label_timer.stop()
         self.thread = None
