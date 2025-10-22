@@ -1,4 +1,3 @@
-# TODO: Confirm to close
 # TODO: Validate that users don't select overlapping paths...
 # TODO: Context menu for thumbnails!
 # TODO: In addition to renaming/moving files as an option, add "replace with symlink" as an option
@@ -106,11 +105,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.build_menubar()
         self.build_central()
         self.build_statusbar()
+        self.build_extra()
 
         for start_path in start_paths or []:
             self.selected_file_path_display.addItem(str(start_path))
 
         self.setWindowIcon(QtGui.QIcon(QtGui.QPixmap(ICON_PATH)))
+
+    def build_extra(self):
+        self.exit_warning = QtWidgets.QMessageBox(self)
+        self.exit_warning.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        self.exit_warning.setWindowTitle("Close?")
+        self.exit_warning.setText("Are you sure you want to quit?")
+        self.exit_warning.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+        self.exit_warning.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+        self.exit_warning.setEscapeButton(QtWidgets.QMessageBox.StandardButton.No)
+        self.exit_warning.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
 
     def build_menubar(self) -> None:
         """Creates the top menu bar"""
@@ -568,11 +578,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
     def on_exit(self, *_):
-        # TODO: Pop warning dialog if there are ANY matches in the thumbnail list
         if self.processor and not self.processor.is_finished():
             self.processor.finish()
 
         self.close()
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        """
+        Intercept window close requests (titlebar X, Cmd/Ctrl+Q, File→Exit, etc.).
+        Only prompt if data is loaded.
+        """
+        if self.processor and len(self.processor.matches) and not self.confirm_close():
+            # There IS data loaded and user said NO to exiting
+            event.ignore()
+            return
+        event.accept()
 
     def on_page_down(self, *_):
         if self.last_page == 0:
@@ -796,3 +816,12 @@ class MainWindow(QtWidgets.QMainWindow):
             dlg.setWindowTitle("Result")
             dlg.setText(popup_text)
             dlg.exec()
+
+    def confirm_close(self) -> bool:
+        """
+        Show a confirmation dialog asking if the user really wants to close.
+
+        Returns:
+            True if the user confirmed closing; False to keep the app open.
+        """
+        return self.exit_warning.exec() == QtWidgets.QMessageBox.StandardButton.Yes
