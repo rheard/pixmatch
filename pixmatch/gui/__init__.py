@@ -146,6 +146,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # endregion
 
         # region Edit menu
+        # TODO: When adding this, make sure not to allow marking a zip file as delete
         mark_delete = QtGui.QAction("Delete", self, enabled=False)
         mark_ignore = QtGui.QAction("Ignore", self, enabled=False)
         mark_ignore_group = QtGui.QAction("Ignore Group", self, enabled=False)
@@ -661,6 +662,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # region File Path Selection display
     def build_file_path_selection_display(self):
+        # TODO: I need better icons here but I can't find the "in"/"out" icons in VP execution data...
 
         # region Selected File Path sort controls
         file_path_up_control = QtWidgets.QPushButton("^+")

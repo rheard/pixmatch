@@ -19,7 +19,7 @@ if __name__ == "__main__":
         type=Path,
         help="Folders to load into the selected file path display (to speed up testing).",
     )
-    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--verbose', action='store_true', help="More detailed logging")
     args = parser.parse_args()
 
     logging.basicConfig(
