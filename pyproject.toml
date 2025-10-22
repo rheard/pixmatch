@@ -36,7 +36,6 @@ Repository = "https://github.com/rheard/pixmatch"
 
 [tool.ruff]
 line-length = 120
-extend-exclude=["twosquares-stubs"]
 
 [tool.ruff.lint]
 preview = true
@@ -116,4 +115,4 @@ force-wrap-aliases = true
 combine-as-imports = true
 lines-after-imports = 1
 lines-between-types = 1
-known-first-party = ["twosquares"]
+known-first-party = ["pixmatch"]

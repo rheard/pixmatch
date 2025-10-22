@@ -20,6 +20,11 @@ ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
 logger = logging.getLogger(__name__)
 
 
+def ceildiv(a, b):
+    """The opposite of floordiv, //"""
+    return -(a // -b)
+
+
 def project_version() -> str:
     try:
         return version("pixmatch")         # e.g. "myapp"
@@ -109,6 +114,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for start_path in start_paths or []:
             self.selected_file_path_display.addItem(str(start_path))
+
+        if start_paths:
+            self.selected_file_path_display.setCurrentRow(0)
 
         self.setWindowIcon(QtGui.QIcon(QtGui.QPixmap(ICON_PATH)))
 
@@ -500,7 +508,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pause_btn.setEnabled(True)
         self.precision_slider.setEnabled(False)
         self.hash_match_chkbx.setEnabled(False)
-        self._elapsed_secs = 0
         self._run_timer.start()
         self._label_timer.start()
         return
@@ -520,7 +527,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @property
     def last_page(self):
-        return len(self.processor.matches) // self.duplicate_group_list._max_rows
+        return ceildiv(len(self.processor.matches), self.duplicate_group_list._max_rows)
 
     def on_new_match_group_found(self, match_group: ImageMatch):
         if self._gui_paused:
