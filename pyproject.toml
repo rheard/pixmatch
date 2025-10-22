@@ -31,6 +31,9 @@ dependencies = [
 [tool.setuptools.package-data]
 "pixmatch.gui" = ["*.ico", "*.png"]
 
+[tool.setuptools.packages.find]
+include = ["pixmatch"]
+
 [project.optional-dependencies]
 gui = ["PySide6"]
 
