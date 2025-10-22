@@ -392,6 +392,35 @@ class ThumbnailTile(QtWidgets.QFrame):
             _overlay_icon.setFixedSize(thumb_size, thumb_size)  # small badge; adjust later if you want
             _overlay_icon.setPixmap(get_overlay_icon(thumb_size / 1.5, thumb_size / 1.5))
 
+        self.context_menu = QtWidgets.QMenu(self)
+
+        act_delete = self.context_menu.addAction("Delete")
+        act_ignore = self.context_menu.addAction("Ignore")
+        act_ignore_group = self.context_menu.addAction("Ignore group")
+        self.context_menu.addSeparator()
+        act_rename = self.context_menu.addAction("Rename this file...")
+        act_move = self.context_menu.addAction("Move this file")
+        act_symlink = self.context_menu.addAction("Symlink this file")
+        self.context_menu.addSeparator()
+        act_unmark = self.context_menu.addAction("Unmark")
+
+        # Enablement: only these three should work right now
+        # If the path is from a zip (locked), disable Delete here as well.
+        act_delete.setEnabled(not bool(self._path.subpath))
+        act_ignore.setEnabled(True)
+        act_unmark.setEnabled(True)
+
+        # Everything else disabled for now
+        act_ignore_group.setEnabled(False)
+        act_rename.setEnabled(False)
+        act_move.setEnabled(False)
+        act_symlink.setEnabled(False)
+
+        # Wire up state changes
+        act_delete.triggered.connect(lambda _=False: setattr(self, "state", SelectionState.DELETE))
+        act_ignore.triggered.connect(lambda _=False: setattr(self, "state", SelectionState.IGNORE))
+        act_unmark.triggered.connect(lambda _=False: setattr(self, "state", SelectionState.KEEP))
+
         self._apply_state_style()
 
     @property
@@ -449,6 +478,10 @@ class ThumbnailTile(QtWidgets.QFrame):
             }}
             """
         )
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+        self.context_menu.exec(event.globalPos())
+        event.accept()
 
 
 class DuplicateGroupRow(QtWidgets.QWidget):

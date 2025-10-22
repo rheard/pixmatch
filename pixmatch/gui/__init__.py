@@ -1,6 +1,4 @@
 # TODO: Validate that users don't select overlapping paths...
-# TODO: Context menu for thumbnails!
-# TODO: In addition to renaming/moving files as an option, add "replace with symlink" as an option
 
 
 import logging
