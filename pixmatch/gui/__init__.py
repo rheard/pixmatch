@@ -8,7 +8,6 @@
 
 
 import logging
-import sys
 
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
@@ -576,7 +575,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.processor and not self.processor.is_finished():
             self.processor.finish()
 
-        sys.exit()
+        self.close()
 
     def on_page_down(self, *_):
         if self.last_page == 0:
