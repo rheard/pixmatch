@@ -28,6 +28,9 @@ dependencies = [
     "imagehash",
 ]
 
+[tool.setuptools.package-data]
+"pixmatch.gui" = ["*.ico", "*.png"]
+
 [project.optional-dependencies]
 gui = ["PySide6"]
 
