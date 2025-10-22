@@ -100,7 +100,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1200, 800)
 
         # State
-        self.current_page: int = 0
+        self.current_page: int = 1
         self.processor = None
         self.file_states = dict()
         self.threadpool = QtCore.QThreadPool()
@@ -534,9 +534,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         page_this_belongs_on, row_this_is = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
-        self.duplicate_group_list.update_page_indicator(self.current_page + 1, self.last_page + 1)
+        self.duplicate_group_list.update_page_indicator(self.current_page, self.last_page)
 
-        if self.current_page == page_this_belongs_on:
+        if self.current_page == page_this_belongs_on + 1:
             self.duplicate_group_list.add_group(match_group.matches)
 
         self.set_duplicate_groups_label(len(self.processor.matches))
@@ -551,7 +551,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         page_this_belongs_on, row_this_is = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
 
-        if self.current_page == page_this_belongs_on:
+        if self.current_page == page_this_belongs_on + 1:
             self.duplicate_group_list._rows[row_this_is].add_tile(new_match)
 
         self.set_duplicate_images_label(self.processor.duplicate_images)
@@ -602,11 +602,11 @@ class MainWindow(QtWidgets.QMainWindow):
         event.accept()
 
     def on_page_down(self, *_):
-        if self.last_page == 0:
+        if self.last_page == 1:
             # Theres only one page....
             return
 
-        if self.current_page == 0:
+        if self.current_page == 1:
             self.current_page = self.last_page
         else:
             self.current_page -= 1
@@ -614,20 +614,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_group_list()
 
     def on_page_up(self, *_):
-        if self.last_page == 0:
+        if self.last_page == 1:
             # Theres only one page....
             return
 
         if self.current_page == self.last_page:
-            self.current_page = 0
+            self.current_page = 1
         else:
             self.current_page += 1
 
         self.update_group_list()
 
     def on_page_first(self):
-        if self.current_page != 0:
-            self.current_page = 0
+        if self.current_page != 1:
+            self.current_page = 1
             self.update_group_list()
 
     def on_page_last(self):
@@ -640,7 +640,7 @@ class MainWindow(QtWidgets.QMainWindow):
         row_count = self.duplicate_group_list._max_rows
         self.duplicate_group_list.set_groups(
             [m.matches
-             for m in self.processor.matches[self.current_page * row_count:(self.current_page + 1) * row_count]]
+             for m in self.processor.matches[(self.current_page - 1) * row_count:self.current_page * row_count]]
         )
 
         for group in self.duplicate_group_list._rows:
@@ -649,7 +649,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 if set_state:
                     tile.state = set_state
 
-        self.duplicate_group_list.update_page_indicator(self.current_page + 1, self.last_page + 1)
+        self.duplicate_group_list.update_page_indicator(self.current_page, self.last_page)
 
     def on_match_state_changed(self, path: ZipPath, state):
         self.file_states[path] = state
