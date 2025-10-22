@@ -143,7 +143,7 @@ class ImageViewPane(QtWidgets.QWidget):
 
         self.scaled.clear()
 
-    @lru_cache(maxsize=5)
+    # @lru_cache(maxsize=5)
     def get_movie(self, path: ZipPath):
         file_size = modified = None
         # We're setting a movie...
@@ -165,7 +165,7 @@ class ImageViewPane(QtWidgets.QWidget):
 
         return movie, file_size, modified
 
-    @lru_cache(maxsize=10)
+    # @lru_cache(maxsize=10)
     def get_pixmap(self, path: ZipPath):
         file_size = modified = None
         # We're setting an image...
