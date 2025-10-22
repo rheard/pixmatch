@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum, auto
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 from zipfile import ZipFile
@@ -143,6 +143,46 @@ class ImageViewPane(QtWidgets.QWidget):
 
         self.scaled.clear()
 
+    @lru_cache(maxsize=5)
+    def get_movie(self, path: ZipPath):
+        file_size = modified = None
+        # We're setting a movie...
+        if path.subpath:
+            # Need to load movie from a zipfile
+            with ZipFile(path.path) as zf:
+                st = zf.getinfo(path.subpath)
+                modified = st.date_time
+                file_size = st.file_size
+                self._qbytearray = QtCore.QByteArray(zf.read(path.subpath))
+                self._buffer = QtCore.QBuffer(self._qbytearray)
+                self._buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly)
+
+                movie = QtGui.QMovie()
+                movie.setDevice(self._buffer)
+        else:
+            # Basic movie path
+            movie = QtGui.QMovie(str(path.path))
+
+        return movie, file_size, modified
+
+    @lru_cache(maxsize=10)
+    def get_pixmap(self, path: ZipPath):
+        file_size = modified = None
+        # We're setting an image...
+        if path.subpath:
+            # Need to load image from a zipfile
+            with ZipFile(path.path) as zf:
+                st = zf.getinfo(path.subpath)
+                modified = st.date_time
+                file_size = st.file_size
+                pixmap = QtGui.QPixmap()
+                pixmap.loadFromData(zf.read(path.subpath))
+        else:
+            # Basic image path
+            pixmap = QtGui.QPixmap(str(path.path))
+
+        return pixmap, file_size, modified
+
     def set_image(self, path: ZipPath):
         if path == self.current_path:
             return
@@ -152,23 +192,7 @@ class ImageViewPane(QtWidgets.QWidget):
         extra = ''
         self.clear()
         if path.is_gif:
-            # We're setting a movie...
-            if path.subpath:
-                # Need to load movie from a zipfile
-                with ZipFile(path.path) as zf:
-                    st = zf.getinfo(path.subpath)
-                    modified = st.date_time
-                    file_size = st.file_size
-                    self._qbytearray = QtCore.QByteArray(zf.read(path.subpath))
-                    self._buffer = QtCore.QBuffer(self._qbytearray)
-                    self._buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly)
-
-                    movie = QtGui.QMovie()
-                    movie.setDevice(self._buffer)
-            else:
-                # Basic movie path
-                movie = QtGui.QMovie(str(path.path))
-
+            movie, file_size, modified = self.get_movie(path)
             object_size = movie_size(movie)
 
             if self.stack.currentIndex() == 0:
@@ -189,19 +213,7 @@ class ImageViewPane(QtWidgets.QWidget):
                 extra = f'({human_bytes(uncompressed_size)}) '
             movie.start()
         else:
-            # We're setting an image...
-            if path.subpath:
-                # Need to load image from a zipfile
-                with ZipFile(path.path) as zf:
-                    st = zf.getinfo(path.subpath)
-                    modified = st.date_time
-                    file_size = st.file_size
-                    pixmap = QtGui.QPixmap()
-                    pixmap.loadFromData(zf.read(path.subpath))
-            else:
-                # Basic image path
-                pixmap = QtGui.QPixmap(str(path.path))
-
+            pixmap, file_size, modified = self.get_pixmap(path)
             extra = f'({human_bytes(pixmap.toImage().sizeInBytes())}) '
             object_size = pixmap.size()
 
