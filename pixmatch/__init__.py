@@ -415,6 +415,9 @@ class ImageMatcher:
                         if any(_is_under(d, f) for d in self._removed_paths):
                             continue
 
+                        if any(str(f) == d.path for d in self._reverse_hashes):
+                            continue
+
                         self.found_images += 1
                         tp.apply_async(
                             _process_image,
