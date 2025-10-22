@@ -20,7 +20,7 @@ Supported extensions: `.jpg`, `.jpeg`, `.png`, `.webp`, `.tif`, `.tiff`, `.bmp`,
 PixMatch is a standard Python app (GUI via PySide6).
 
 ```bash
-python -m pip install pixmatch
+python -m pip install pixmatch[gui]
 ```
 
 ## Running
