@@ -387,7 +387,7 @@ class MainWindow(QtWidgets.QMainWindow):
         primary_controls = QtWidgets.QVBoxLayout()
         primary_controls.setContentsMargins(NO_MARGIN)
         primary_controls.addLayout(self.build_file_path_selection_display())
-        primary_controls.addWidget(QtWidgets.QWidget(layout=labels_and_such, fixedHeight=240))
+        primary_controls.addWidget(QtWidgets.QWidget(layout=labels_and_such, fixedHeight=200))
 
         general_controls = QtWidgets.QHBoxLayout()
         general_controls.setContentsMargins(NO_MARGIN)
@@ -526,7 +526,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @property
     def last_page(self):
-        return ceildiv(len(self.processor.matches), self.duplicate_group_list._max_rows)
+        return ceildiv(len(self.processor.matches), self.duplicate_group_list._max_rows) or 1
 
     def on_new_match_group_found(self, match_group: ImageMatch):
         if self._gui_paused:
@@ -638,6 +638,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.update_group_list()
 
     def update_group_list(self):
+        self.image_view_area.clear()
+
         row_count = self.duplicate_group_list._max_rows
         self.duplicate_group_list.set_groups(
             [m.matches

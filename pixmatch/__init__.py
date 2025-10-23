@@ -310,7 +310,9 @@ class ImageMatcher:
             return
 
         if isinstance(hashes, dict):
+            self.found_images -= 1
             for sub_path, sub_hashes in hashes.items():
+                self.found_images += 1
                 self._process_image_callback((ZipPath(str(path), sub_path), sub_hashes))
             return
 

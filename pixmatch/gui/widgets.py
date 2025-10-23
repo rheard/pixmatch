@@ -1,3 +1,5 @@
+# TODO: In addition to ignore folder, add ignore zip if its a zip file
+
 from datetime import datetime, timezone
 from enum import Enum, auto
 from functools import cache, lru_cache
@@ -376,7 +378,9 @@ class ThumbnailTile(QtWidgets.QFrame):
         self._state = SelectionState.KEEP
         self._thumb_size = thumb_size
 
-        self._image = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter, pixmap=pixmap)
+        self._image = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        if pixmap:
+            self._image.setPixmap(pixmap)
         self._image.setFixedSize(thumb_size, thumb_size)
 
         lay = QtWidgets.QVBoxLayout(self)
@@ -511,7 +515,14 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         return list(self._tiles)
 
     def add_tile(self, path: ZipPath):
-        pm = _load_pixmap(path, self._thumb_size)
+        try:
+            # This is just a personal thing...
+            #   I've found duplicates in my zips, gone and cleaned them,
+            #   and then it messed up loading thumbnails here...
+            pm = _load_pixmap(path, self._thumb_size)
+        except (KeyError, FileNotFoundError):
+            pm = None
+
         tile = ThumbnailTile(path=path, pixmap=pm, thumb_size=self._thumb_size)
         tile.stateChanged.connect(self.tileStateChanged)
         tile.hovered.connect(self.tileHovered)
