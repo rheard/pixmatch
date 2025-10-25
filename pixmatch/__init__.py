@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ZipPath:
+    """
+    A general object describing a Path.
+
+    All paths in pixmatch will be one of these. `subpath` will be empty for non-zip file paths.
+
+    Attributes:
+        path (str): The path to the file.
+        subpath (str): The subpath in the zip if `path` is for a zip.
+    """
+    # TODO: At some point convert this to Path.
+    #   When I tried that last it introduced problems with inter-process communication
     path: str
     subpath: str
 
@@ -48,6 +59,12 @@ def _is_under(folder_abs: str, target: str | Path) -> bool:
 
 
 def phash_params_for_strength(strength: int) -> tuple[int, int]:
+    """
+    Convert a 0-10 strength to settings for imagehash
+
+    Returns:
+        tuple<int, int>: The hash size (in bytes) and the high frequency factor
+    """
     # TODO: This sucks.
     strength = max(0, min(10, strength))
     if strength >= 10:
@@ -94,7 +111,7 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
         return [hasher.hexdigest()]
 
     hash_size, highfreq_factor = phash_params_for_strength(strength)
-    with (Image.open(f) as im):
+    with Image.open(f) as im:
         if is_gif:
             initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
             # This is going to be a bit confusing but basically, imagehash produces weird hashes for some gifs
@@ -131,6 +148,7 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
 
 
 def _process_image(path: str | Path, strength=5, exact_match=False):
+    """Get the hashes for a given path. Is multiprocessing compatible"""
     path = Path(path)
     if path.suffix.lower() != '.zip':
         return path, calculate_hashes(path, is_gif=path.suffix.lower() in {".gif", ".webp"},
@@ -148,31 +166,46 @@ def _process_image(path: str | Path, strength=5, exact_match=False):
 
 @dataclass
 class ImageMatch:
+    """A match data structure containing the matches and where this match lies in the match list"""
     match_i: int | None = field(default=None)
     matches: list[ZipPath] = field(default_factory=list)
 
 
+# region Events
 @dataclass(frozen=True)
 class NewGroup:
-    group: "ImageMatch"  # forward-ref to your class
+    """A new group event"""
+    group: "ImageMatch"
 
 
 @dataclass(frozen=True)
 class NewMatch:
+    """A new match event"""
     group: "ImageMatch"
     path: ZipPath
 
 
 @dataclass(frozen=True)
 class Finished:
+    """A finished event"""
     pass
 
 
 MatcherEvent = Union[NewGroup, NewMatch, Finished]
+# endregion
 
 
-# TODO: FINISHED signal?
 class ImageMatcher:
+    """
+    An image matching SDK
+
+    Args:
+        strength (int): The 0-10 strength to use for matching. Defaults to 5.
+        exact_match (bool): Should use SHA-256 hashes? If False, the default, will use perceptual hashes.
+            If True, strength must be 10.
+        processes (int): The number of processes to use. Defaults to None.
+        extensions (set): The extensions to process. Optional.
+    """
     SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
 
     def __init__(self, strength: int = 5, exact_match: bool = False, processes: int | None = None,
@@ -185,35 +218,44 @@ class ImageMatcher:
         self.strength = strength
         self.exact_match = exact_match
         self.processes = processes
+
         self.found_images = 0
         self.processed_images = 0
         self.duplicate_images = 0
+        self.matches = []
 
         m = Manager()
-        self.events = m.Queue()
-        self._new_paths = m.Queue()
-        self._removed_paths = set()
-        self._processed_paths = set()
-        self._hashes = defaultdict(ImageMatch)
-        self._reverse_hashes = dict()
+        self.events = m.Queue()  # Events to go to higher level users
+        self._new_paths = m.Queue()  # Inbound queue for new paths that are added while processing is running
+        self._removed_paths = set()  # Paths that have been removed from processing after processing has been started
+        self._processed_paths = set()  # Paths that have been successfully processed
+        self._hashes = defaultdict(ImageMatch)  # Hash -> Paths
+        self._reverse_hashes = dict()  # Path -> Hash
 
+        # Pausing and finished signaling...
         self._not_paused = Event()
         self._not_paused.set()
         self._finished = Event()
         self._finished.set()
 
-        self.matches = []
+    @property
+    def left_to_process(self):
+        """Files that are left to process"""
+        return self.found_images - self.processed_images
 
     def add_path(self, path: str | Path):
+        """Add a path for processing"""
         path = str(Path(path).absolute())
         self._removed_paths.discard(path)
         self._new_paths.put(path)
 
-    def remove_path(self, folder: str | Path) -> None:
+    def remove_path(self, folder: str | Path):
         """
         Mark a folder to be skipped going forward, and remove already-indexed files
         that live under it. Pauses briefly if not already paused to keep state sane.
         """
+        # TODO: This works but the biggest problem with it is that it will not remove any images which are still
+        #   queue'd up for processing in the ThreadPool... I'm not sure how to fix that yet.
         folder = str(Path(folder).absolute())
         paused = self.conditional_pause()
         self._removed_paths.add(folder)
@@ -227,15 +269,8 @@ class ImageMatcher:
 
         self.conditional_resume(paused)
 
-    @property
-    def left_to_process(self):
-        return self.found_images - self.processed_images
-
-    def pause(self):
-        logger.debug('Performing pause')
-        self._not_paused.clear()
-
-    def conditional_pause(self):
+    def conditional_pause(self) -> bool:
+        """Pause if not paused and return if was paused"""
         _conditional_pause = self.is_paused()
         if not _conditional_pause:
             logger.debug('Performing conditional pause')
@@ -243,29 +278,41 @@ class ImageMatcher:
 
         return _conditional_pause
 
-    def conditional_resume(self, was_paused):
+    def conditional_resume(self, was_paused: bool):
+        """Resume if not paused previous (from call to `conditional_pause`)"""
         if not was_paused and not self.is_finished():
             logger.debug('Performing conditional resume')
             self.resume()
 
+    def pause(self):
+        """Pause processing"""
+        logger.debug('Performing pause')
+        self._not_paused.clear()
+
     def is_paused(self):
+        """Is processing paused"""
         return not self._not_paused.is_set()
 
     def finish(self):
+        """Finish processing"""
         logger.debug('Performing finished')
         self._finished.set()
 
     def is_finished(self):
+        """Is processing finished"""
         return self._finished.is_set()
 
     def resume(self):
+        """Resume processing"""
         logger.debug('Performing resume')
         self._not_paused.set()
 
     def running(self):
+        """Currently running and loading hashes?"""
         return not self.is_paused() and (not self.is_finished() or self.left_to_process)
 
     def remove(self, path):
+        """Remove a loaded path completely from the image matching system. Will not delete a file."""
         # Pause things while we remove things...
         logger.info('Removing %s from %s', path, self.__class__.__name__)
         paused = self.conditional_pause()
@@ -294,18 +341,38 @@ class ImageMatcher:
         self.conditional_resume(paused)
 
     def refresh_match_indexes(self, start=0):
+        """Update the match_i value for all the matches passed a certain point"""
         for match_i, match in enumerate(self.matches[start:], start=start):
             match.match_i = match_i
 
     def _process_image_callback(self, result):
+        """
+        Handle the result of hashing an image.
+
+        This needs to do quite a few things including sanitizing the results,
+            actually checking if the hash matches an existing image,
+            adding the image and any matches to the backend data structures, notify any listeners,
+            update the found and processed image counts,
+            and verify that this result wasn't added as a removed path since it was queued.
+
+        Args:
+            result: A tuple consisting of the path to the file, and the resultant hashes.
+                If the hashes are a dict, then it is assumed that the path is for a zip. In that case,
+                the individual zip files will sanitized and re-ran through this callback.
+        """
+        # TODO: This callback must return IMMEDIATELY and is currently too slow for large amounts of zips.
+        #   Perhaps create a new queue/thread and queue up processing for zip results?
+        # Check for paused or finished signals
         self._not_paused.wait()
         if self.is_finished():
             return
 
+        # region Sanitize results
         path: Path | str | ZipPath
         path, hashes = result
 
         if any(_is_under(d, path.path if isinstance(path, ZipPath) else path) for d in self._removed_paths):
+            # This image was removed AFTER it was queue'd! So decrement the found images count and just leave...
             self.found_images -= 1
             return
 
@@ -317,7 +384,9 @@ class ImageMatcher:
             return
 
         if not isinstance(path, ZipPath):
+            # From this point on, EVERYTHING should be a ZipPath
             path = ZipPath(str(path), "")
+        # endregion
 
         if path in self._reverse_hashes:
             self.found_images -= 1
@@ -325,19 +394,14 @@ class ImageMatcher:
 
         self.processed_images += 1
         for hash_ in hashes:
+            # Of all the hashes returned, which may contain hashes for rotations/mirrors, look for matches...
             if hash_ not in self._hashes:
                 continue
 
+            # We have found a match!
             self._reverse_hashes[path] = hash_
-
-            # This appears to be a new match!
-            for match in self._hashes[hash_].matches:
-                if path.absolute() == match.absolute():
-                    # This appears to be a duplicate PATH...
-                    logger.warning('Duplicate files entered! %s, %s', path, match)
-                    return
-
             self._hashes[hash_].matches.append(path)
+
             if self._hashes[hash_].match_i is None and len(self._hashes[hash_].matches) >= 2:
                 # This is a brand new match group!
                 self._hashes[hash_].match_i = len(self.matches)
@@ -355,7 +419,7 @@ class ImageMatcher:
 
             break
         else:
-            # This is a new hash, so just add it to the hashmap and move on...
+            # This is a new image not matching any previous, so just add it to the hashmap and move on...
             #   Just use the initial orientation
             hash_ = hashes[0]
             self._reverse_hashes[path] = hash_
@@ -376,9 +440,6 @@ class ImageMatcher:
             yield self._new_paths.get_nowait()
 
     def run(self, paths: list[str | Path]):
-        # TODO: Verify none of the paths overlap
-        # TODO: Verify none of the dirs have been deleted after we started
-
         self._not_paused.set()
         self._finished.clear()
 

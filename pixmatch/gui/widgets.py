@@ -41,25 +41,14 @@ def _load_pixmap(path: ZipPath, thumb_size: int) -> QtGui.QPixmap:
     else:
         pm = QtGui.QPixmap(str(path.path))
 
-    if pm.isNull():
-        # Fallback: generate a checkerboard if load failed.
-        pm = QtGui.QPixmap(thumb_size, thumb_size)
-        pm.fill(QtGui.QColor("lightgray"))
-        p = QtGui.QPainter(pm)
-        p.setPen(QtCore.Qt.PenStyle.NoPen)
-        c1 = QtGui.QColor(210, 210, 210)
-        c2 = QtGui.QColor(180, 180, 180)
-        for y in range(0, thumb_size, 16):
-            for x in range(0, thumb_size, 16):
-                p.setBrush(c1 if ((x // 16 + y // 16) % 2 == 0) else c2)
-                p.drawRect(x, y, 16, 16)
-        p.end()
     return pm.scaled(thumb_size, thumb_size,
                      QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
                      QtCore.Qt.TransformationMode.FastTransformation)
 
 
+# TODO: Both of these methods need to iterate over a QMovie so perhaps merge the work together
 def movie_size(movie: QtGui.QMovie):
+    """Get the max dimensions of a QMovie"""
     movie.jumpToFrame(0)
     rect = QtCore.QRect()
     for i in range(movie.frameCount()):
@@ -72,6 +61,7 @@ def movie_size(movie: QtGui.QMovie):
 
 
 def movie_uncompressed_filesize(movie: QtGui.QMovie):
+    """Get the uncompressed size of a QMovie"""
     file_size = 0
     for i in range(movie.frameCount()):
         movie.jumpToNextFrame()
@@ -82,7 +72,12 @@ def movie_uncompressed_filesize(movie: QtGui.QMovie):
 
 class ImageViewPane(QtWidgets.QWidget):
     """Container with a stacked image viewer and a bottom overlay status label."""
+
     def __init__(self, parent=None):
+        # This works by having 2 image labels depending on which scaling option was selected
+        #   First is the simple scaled label handling scaling
+        #   Second is a scroll area with a no-scaling label
+        # Then a status label at the bottom
         super().__init__(parent)
 
         # --- viewers ---
@@ -101,10 +96,9 @@ class ImageViewPane(QtWidgets.QWidget):
 
         # Only one visible at a time -> use a stack
         self.stack = QtWidgets.QStackedWidget()
-        self.stack.addWidget(self.scaled)   # index 0
-        self.stack.addWidget(self.scroll)   # index 1
+        self.stack.addWidget(self.scaled)
+        self.stack.addWidget(self.scroll)
 
-        # --- overlay status label ---
         self.status = QtWidgets.QLabel(text="Ready", alignment=QtCore.Qt.AlignmentFlag.AlignBottom)
         self.status.setContentsMargins(NO_MARGIN)
         self.status.setObjectName("imageStatus")
@@ -120,11 +114,12 @@ class ImageViewPane(QtWidgets.QWidget):
         lay.addWidget(self.stack)
         lay.addWidget(self.status)
 
-    # Optional helper you can call to update the text
     def set_status(self, text: str):
+        """Set text of the status bar"""
         self.status.setText(text)
 
     def set_index(self, index: int):
+        """Set the index of which image view to use. 0 for scaled label, 1 for scroll area"""
         if index not in (0, 1):
             raise ValueError('Valid index must be 0 or 1 for the image pane to select!')
 
@@ -139,14 +134,18 @@ class ImageViewPane(QtWidgets.QWidget):
         """Clear and reset the current object, and the two sub-objects"""
         existing_movie = self.raw_label.movie()
         if existing_movie:
+            existing_movie.device().close()
             existing_movie.stop()
             existing_movie.deleteLater()
-        self.raw_label.clear()
 
+        self.raw_label.clear()
         self.scaled.clear()
 
+    # TODO: Find a way to cache the following two methods.
+    #   The cache may need to be cleared in the event of deletion so no files are left open
     # @lru_cache(maxsize=5)
-    def get_movie(self, path: ZipPath):
+    def get_movie(self, path: ZipPath) -> tuple[QtGui.QMovie, int, tuple]:
+        """Load a QMovie and details from either a zip or just the file system"""
         file_size = modified = None
         # We're setting a movie...
         if path.subpath:
@@ -168,7 +167,8 @@ class ImageViewPane(QtWidgets.QWidget):
         return movie, file_size, modified
 
     # @lru_cache(maxsize=10)
-    def get_pixmap(self, path: ZipPath):
+    def get_pixmap(self, path: ZipPath) -> tuple[QtGui.QPixmap, int, tuple]:
+        """Load a QPixmap and details from either a zip or just the file system"""
         file_size = modified = None
         # We're setting an image...
         if path.subpath:
@@ -186,6 +186,7 @@ class ImageViewPane(QtWidgets.QWidget):
         return pixmap, file_size, modified
 
     def set_image(self, path: ZipPath):
+        """Set the image to show in the image view area. Can be an animated image."""
         if path == self.current_path:
             return
 
@@ -215,6 +216,7 @@ class ImageViewPane(QtWidgets.QWidget):
                 extra = f'({human_bytes(uncompressed_size)}) '
             movie.start()
         else:
+            # Not an animated image, just a normal boring pixmap
             pixmap, file_size, modified = self.get_pixmap(path)
             extra = f'({human_bytes(pixmap.toImage().sizeInBytes())}) '
             object_size = pixmap.size()
@@ -237,6 +239,7 @@ class ImageViewPane(QtWidgets.QWidget):
             file_size = st.st_size
         elif modified:
             modified = f"{modified[1]}/{modified[2]}/{modified[0]}"
+
         self.status.setText(
             f"{path.absolute()} ("
             f"{human_bytes(file_size)} {extra}"
@@ -249,7 +252,7 @@ class ImageViewPane(QtWidgets.QWidget):
 
 class ScaledLabel(QtWidgets.QLabel):
     """
-    A version of the above ScaledLabel but for gifs/movies
+    A version of ScaledLabel but supporting gifs/movies as well as images
 
     https://stackoverflow.com/questions/72188903
     https://stackoverflow.com/questions/77602181
@@ -263,6 +266,7 @@ class ScaledLabel(QtWidgets.QLabel):
         self.orig_movie = self.movie()
 
     def clear(self):
+        """Clear the label, make sure no files are left open"""
         super().clear()
         self.orig_pixmap = None
         if self.orig_movie:
@@ -272,13 +276,16 @@ class ScaledLabel(QtWidgets.QLabel):
             self.orig_movie = None
 
     def minimumSizeHint(self):
+        # TODO: I don't know that this whole _minSize thing is required
         if self._minSize.isValid():
             return self._minSize
         return super().minimumSizeHint()
 
-    def setPixmap(self, pixmap):  # overiding setPixmap
+    def setPixmap(self, pixmap):
+        # TODO: I'm not sure why I added this if statement but I think it can go after self.clear?
         if not pixmap:
             return
+
         self.clear()
         self.orig_pixmap = pixmap
         return super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.AspectRatioMode.KeepAspectRatio))
@@ -365,11 +372,13 @@ class ThumbnailTile(QtWidgets.QFrame):
     Attributes:
         path: Image path (opaque identifier for the caller).
         stateChanged(path: str, state: SelectionState): Emitted on state updates.
+        hovered(path: str): Emitted on cursor hovering over thumbnail tile.
     """
+    # TODO: Convert state outline to overlay icon
     stateChanged = QtCore.Signal(ZipPath, SelectionState)
     hovered = QtCore.Signal(ZipPath)
 
-    def __init__(self, path: ZipPath, pixmap: QtGui.QPixmap, thumb_size: int = 32, parent=None):
+    def __init__(self, path: ZipPath, pixmap: QtGui.QPixmap | None = None, thumb_size: int = 32, parent=None):
         super().__init__(parent, frameShape=QtWidgets.QFrame.Shape.Box, lineWidth=2)
         self.setObjectName("ThumbnailTile")
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
@@ -436,36 +445,44 @@ class ThumbnailTile(QtWidgets.QFrame):
         return self._state
 
     @state.setter
-    def state(self, state: SelectionState) -> None:
+    def state(self, state: SelectionState):
         """Set the tile selection state without cycling."""
         if self._state is state:
             return
+
+        locked = bool(self._path.subpath)
+        if locked and state == SelectionState.DELETE:
+            raise ValueError("Cannot set a locked file to the delete state!")
+
         self._state = state
         self._apply_state_style()
         self.stateChanged.emit(self._path, self._state)
 
-    def cycle_state(self) -> None:
+    def cycle_state(self):
         """Advance KEEP → DELETE → IGNORE → KEEP."""
         idx = STATE_ORDER.index(self._state)
         locked = bool(self._path.subpath)
         next_state = STATE_ORDER[(idx + 1) % len(STATE_ORDER)]
+        # Cannot set zips to delete:
         if locked and next_state == SelectionState.DELETE:
             next_state = STATE_ORDER[(idx + 2) % len(STATE_ORDER)]
         self.state = next_state
 
-    def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
+    def mousePressEvent(self, e: QtGui.QMouseEvent):
+        """Cycle state on button press"""
         if e.button() == QtCore.Qt.MouseButton.LeftButton:
             self.cycle_state()
             e.accept()
         else:
             super().mousePressEvent(e)
 
-    def enterEvent(self, e: QtGui.QEnterEvent) -> None:
-        # fire when the cursor enters the tile
+    def enterEvent(self, e: QtGui.QEnterEvent):
+        """Fire hover events"""
         self.hovered.emit(self._path)
         super().enterEvent(e)
 
-    def _apply_state_style(self) -> None:
+    def _apply_state_style(self):
+        """Update frame color"""
         color = STATE_COLORS[self._state]
         self.setStyleSheet(
             f"""
@@ -483,7 +500,8 @@ class ThumbnailTile(QtWidgets.QFrame):
             """
         )
 
-    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent):
+        """Handle opening the context menu"""
         self.context_menu.exec(event.globalPos())
         event.accept()
 
@@ -493,7 +511,8 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     A single row of thumbnails representing one duplicate group.
 
     Signals:
-        tileStateChanged(path: str, state: SelectionState)
+        tileStateChanged(path: ZipPath, state: SelectionState)
+        tileHovered(path: ZipPath)
     """
     tileStateChanged = QtCore.Signal(ZipPath, SelectionState)
     tileHovered = QtCore.Signal(ZipPath)
@@ -534,13 +553,6 @@ class DuplicateGroupList(QtWidgets.QWidget):
     """
     Scrollable list of duplicate groups. Each group renders as a row of thumbnails.
 
-    Public API:
-        set_groups(groups): Load groups; each group is a list of image paths.
-        decisions(): Dict[path, SelectionState] for all tiles.
-        set_max_rows(n): Limit how many groups to show (default 25).
-        set_thumb_size(px): Set square thumbnail size (default 128).
-        reset_states(): Set all tiles to KEEP.
-
     Notes:
         - Clicking a thumbnail cycles KEEP → DELETE → IGNORE.
         - Borders/badges are colored by state.
@@ -565,25 +577,10 @@ class DuplicateGroupList(QtWidgets.QWidget):
         self._vbox.addItem(_tail_spacer)
         self._scroll.setWidget(self._container)
 
-        # Header with quick-actions.
-        # self._header = QtWidgets.QHBoxLayout(contentsMargins=NO_MARGIN)
-        # self._btn_keep_all = QtWidgets.QPushButton("Mark All Keep", contentsMargins=NO_MARGIN)
-        # self._btn_delete_all = QtWidgets.QPushButton("Mark All Delete", contentsMargins=NO_MARGIN)
-        # self._btn_ignore_all = QtWidgets.QPushButton("Mark All Ignore", contentsMargins=NO_MARGIN)
-        # self._header.addWidget(self._btn_keep_all)
-        # self._header.addWidget(self._btn_delete_all)
-        # self._header.addWidget(self._btn_ignore_all)
-        # self._header.addStretch(1)
-
-        # self._btn_keep_all.clicked.connect(lambda: self._bulk_set(SelectionState.KEEP))
-        # self._btn_delete_all.clicked.connect(lambda: self._bulk_set(SelectionState.DELETE))
-        # self._btn_ignore_all.clicked.connect(lambda: self._bulk_set(SelectionState.IGNORE))
-
         # Main layout
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(NO_MARGIN)
         outer.setSpacing(0)
-        # self._outer.addLayout(self._header)
         outer.addWidget(self._scroll)
 
         self._rows: List[DuplicateGroupRow] = []
@@ -620,14 +617,16 @@ class DuplicateGroupList(QtWidgets.QWidget):
             groups: An iterable of groups; each group is an iterable of image file paths.
                     Only the first `max_rows` groups are shown.
         """
-        self._clear_rows()
+        self.clear()
         for group in groups[: self._max_rows]:
             self.add_group(group)
 
     def update_page_indicator(self, current_page, total_pages):
+        """Update page indicator label"""
         self.page_indicator.setText(f"Page {current_page} of {total_pages}")
 
     def add_group(self, group: Sequence[ZipPath]) -> None:
+        """Add a new match group, requiring a new row"""
         if len(self._rows) == self._max_rows:
             raise ValueError("Cannot add a new group to a fully filled group list!")
 
@@ -638,21 +637,13 @@ class DuplicateGroupList(QtWidgets.QWidget):
         self._vbox.insertWidget(tail_index, row)
         self._rows.append(row)
 
-    def decisions(self) -> Dict[ZipPath, SelectionState]:
-        """Collect {path: state} for all tiles across all rows."""
-        out: Dict[ZipPath, SelectionState] = {}
-        for row in self._rows:
-            for tile in row.tiles():
-                out[tile.path] = tile.state
-        return out
-
-    def reset_states(self) -> None:
+    def reset_states(self):
         """Set all tiles to KEEP."""
         for row in self._rows:
             for tile in row.tiles():
                 tile.state = SelectionState.KEEP
 
-    def _clear_rows(self) -> None:
+    def clear(self):
         for row in self._rows:
             row.setParent(None)
             row.deleteLater()
@@ -661,6 +652,12 @@ class DuplicateGroupList(QtWidgets.QWidget):
 
 
 class DirFileSystemModel(QtWidgets.QFileSystemModel):
+    """
+    Custom FileSystemModel.
+
+    This is required so that if a directory is opened and it has no children, it still shows as opened...
+    """
+
     def hasChildren(self, /, parent: QtCore.QModelIndex | QtCore.QPersistentModelIndex = ...):
         file_info = self.fileInfo(parent)
         _dir = QtCore.QDir(file_info.absoluteFilePath())

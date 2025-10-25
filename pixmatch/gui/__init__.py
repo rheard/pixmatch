@@ -1,4 +1,7 @@
 # TODO: Validate that users don't select overlapping paths...
+# TODO: Maybe add session deleted labels which show how many files and their size deleted this session?
+# TODO: Add option to refresh file list, perhaps in context menu
+# TODO: Add a general "process options" button to delete, ignore, move, etc etc
 
 
 import logging
@@ -34,25 +37,23 @@ class WorkerSignals(QtCore.QObject):
     """
     Signals from a running worker thread.
 
-    finished
-        No data
+    new_group
+        Signaled when a new match group is found.
 
-    error
-        tuple (exctype, value, traceback.format_exc())
+    new_match
+        Signaled when a new match is found.
 
-    result
-        object data returned from processing, anything
-
-    progress
-        float indicating % progress
+    finish
+        Signaled when execution is finished, and was not killed.
     """
 
-    new_match = QtCore.Signal(tuple)
     new_group = QtCore.Signal(object)
+    new_match = QtCore.Signal(tuple)
     finish = QtCore.Signal()
 
 
 class ProcessorThread(QtCore.QRunnable):
+    """Handles executing the processor and transferring data from the processor to the GUI"""
 
     def __init__(self, processor, *args, **kwargs):
         super().__init__()
@@ -101,8 +102,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_page: int = 1
         self.processor = None
         self.file_states = dict()
-        self.threadpool = QtCore.QThreadPool()
-        self._gui_paused = False
+        self._threadpool = QtCore.QThreadPool()
 
         # UI build
         self.build_menubar()
@@ -119,6 +119,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowIcon(QtGui.QIcon(QtGui.QPixmap(ICON_PATH)))
 
     def build_extra(self):
+        """Extra items not involved with the main display"""
         self.exit_warning = QtWidgets.QMessageBox(self)
         self.exit_warning.setIcon(QtWidgets.QMessageBox.Icon.Warning)
         self.exit_warning.setWindowTitle("Close?")
@@ -136,7 +137,7 @@ class MainWindow(QtWidgets.QMainWindow):
         load_project = QtGui.QAction("Load Project...", self, enabled=False)
         save_project = QtGui.QAction("Save Project...", self, enabled=False)
         exit_project = QtGui.QAction("Exit", self)
-        exit_project.triggered.connect(self.on_exit)
+        exit_project.triggered.connect(lambda *_: self.close())
 
         file_menu = menu.addMenu("&File")
         file_menu.addAction(load_project)
@@ -234,7 +235,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def build_central(self) -> None:
         """Creates the central stacked widget area for group pages."""
-        # TODO: Add other setting tabs
         style = QtWidgets.QApplication.instance().style()
 
         # region General controls area (top-right)
@@ -339,6 +339,8 @@ class MainWindow(QtWidgets.QMainWindow):
         labels.addLayout(run_controls)
 
         # region Settings tabs
+        # TODO: Add other setting tabs
+
         # region Filter tab
         slider_labels = QtWidgets.QVBoxLayout()
         slider_labels.setContentsMargins(NO_MARGIN)
@@ -438,6 +440,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central_widget)
 
     def _on_run_timer_tick(self):
+        """Timer tick for runtime label, increment the elapsed seconds and draw..."""
         if not self.processor:
             return
 
@@ -449,6 +452,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._timer_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
 
     def _on_labels_tick(self):
+        """Timer tick for general labels, runs quickly"""
         if not self.processor:
             return
 
@@ -463,6 +467,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.hash_match_chkbx.setEnabled(True)
 
     def on_pause(self, e):
+        """Pause button has been pressed, so pause"""
         if not e:
             return
 
@@ -474,6 +479,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._label_timer.stop()
 
     def on_start(self, e):
+        """Start button has been pressed, so start or resume"""
         if not e:
             return
 
@@ -485,6 +491,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
         elif self.processor.is_paused() and not self.processor.is_finished():
+            # Already started so we just need to resume
             self.processor.resume()
             self.pause_btn.setEnabled(True)
             self._run_timer.start()
@@ -499,11 +506,11 @@ class MainWindow(QtWidgets.QMainWindow):
             for i in range(self.selected_file_path_display.count())
         ]
 
-        self.thread = ProcessorThread(self.processor, target_paths)
-        self.thread.signals.new_group.connect(self.on_new_match_group_found)
-        self.thread.signals.new_match.connect(self.on_new_match_found)
-        self.thread.signals.finish.connect(self.on_finish)
-        self.threadpool.start(self.thread)
+        self._thread = ProcessorThread(self.processor, target_paths)
+        self._thread.signals.new_group.connect(self.on_new_match_group_found)
+        self._thread.signals.new_match.connect(self.on_new_match_found)
+        self._thread.signals.finish.connect(self.on_finish)
+        self._threadpool.start(self._thread)
         self.pause_btn.setEnabled(True)
         self.precision_slider.setEnabled(False)
         self.hash_match_chkbx.setEnabled(False)
@@ -511,29 +518,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._label_timer.start()
         return
 
+    def on_delete(self, *_):
+        """Delete button pressed, process delete file states"""
+        self.process_file_states({SelectionState.DELETE})
+
+    def on_ignore(self, *_):
+        """Ignore button pressed, process ignore file states"""
+        self.process_file_states({SelectionState.IGNORE})
+
+    @property
+    def total_pages(self):
+        """How many pages are there in the duplicate group list"""
+        return ceildiv(len(self.processor.matches), self.duplicate_group_list._max_rows) or 1
+
     def on_finish(self):
+        """Finish callback, to update GUI when processing has completed"""
         self.stop_btn.setChecked(True)
         self.pause_btn.setEnabled(False)
         self._run_timer.stop()
         self._label_timer.stop()
-        self.thread = None
-
-    def on_delete(self, *_):
-        self.process_file_states({SelectionState.DELETE})
-
-    def on_ignore(self, *_):
-        self.process_file_states({SelectionState.IGNORE})
-
-    @property
-    def last_page(self):
-        return ceildiv(len(self.processor.matches), self.duplicate_group_list._max_rows) or 1
+        self._thread = None
+        self.update_labels()
 
     def on_new_match_group_found(self, match_group: ImageMatch):
-        if self._gui_paused:
-            return
-
+        """New match group found callback, update the GUI with new match group"""
         page_this_belongs_on, row_this_is = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
-        self.duplicate_group_list.update_page_indicator(self.current_page, self.last_page)
+        self.duplicate_group_list.update_page_indicator(self.current_page, self.total_pages)
 
         if self.current_page == page_this_belongs_on + 1:
             self.duplicate_group_list.add_group(match_group.matches)
@@ -541,12 +551,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_groups_label(len(self.processor.matches))
 
     def on_new_match_found(self, response):
+        """New match found callback, update the GUI with new match"""
+        # First we must decompose the response
+        #   TODO: Can I just create a callback with 2 args?
         match_group: ImageMatch
         new_match: ZipPath
         match_group, new_match = response
-
-        if self._gui_paused:
-            return
 
         page_this_belongs_on, row_this_is = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
 
@@ -555,19 +565,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
-    def set_duplicate_groups_label(self, duplicate_groups):
+    def set_duplicate_groups_label(self, duplicate_groups: int):
+        """Set the duplicate groups count label"""
         self._dup_groups_label.setText(f"Duplicate groups....{duplicate_groups}")
 
-    def set_duplicate_images_label(self, duplicate_images):
+    def set_duplicate_images_label(self, duplicate_images: int):
+        """Set the duplicate images count label"""
         self._dup_pictures_label.setText(f"Duplicate pictures..{duplicate_images}")
 
-    def set_remaining_files_label(self, remaining_files):
+    def set_remaining_files_label(self, remaining_files: int):
+        """Set the remaining files count label"""
         self._remaining_files_label.setText(f"Remaining files....{remaining_files}")
 
-    def set_loaded_pictures_label(self, loaded_pictures):
+    def set_loaded_pictures_label(self, loaded_pictures: int):
+        """Set the loaded pictures count label"""
         self._loaded_pictures_label.setText(f"Loaded pictures..{loaded_pictures}")
 
     def update_labels(self):
+        """Update all of the boring labels that need to be regularly updated, and the progress bar"""
         if not self.processor:
             return
 
@@ -583,43 +598,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_groups_label(len(self.processor.matches))
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
-    def on_exit(self, *_):
-        self.close()
-
-    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        """
-        Intercept window close requests (titlebar X, Cmd/Ctrl+Q, File→Exit, etc.).
-        Only prompt if data is loaded.
-        """
-        if self.processor:
-            if len(self.processor.matches) and not self.confirm_close():
-                # There IS data loaded and user said NO to exiting
-                event.ignore()
-                return
-
-            if self.processor.running():
-                self.processor.finish()
-
-        event.accept()
-
     def on_page_down(self, *_):
-        if self.last_page == 1:
-            # Theres only one page....
+        """The page down button has been pressed"""
+        if self.total_pages == 1:
+            # Theres only one page so do nothing
             return
 
+        # Make the page system rotate around the beginning
         if self.current_page == 1:
-            self.current_page = self.last_page
+            self.current_page = self.total_pages
         else:
             self.current_page -= 1
 
         self.update_group_list()
 
     def on_page_up(self, *_):
-        if self.last_page == 1:
+        """The page up button has been pressed"""
+        if self.total_pages == 1:
             # Theres only one page....
             return
 
-        if self.current_page == self.last_page:
+        # Make the page system rotate around the end
+        if self.current_page == self.total_pages:
             self.current_page = 1
         else:
             self.current_page += 1
@@ -627,17 +627,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_group_list()
 
     def on_page_first(self):
+        """Go to first page button pressed"""
         if self.current_page != 1:
             self.current_page = 1
             self.update_group_list()
 
     def on_page_last(self):
-        last_page = self.last_page
+        """Go to last page button pressed"""
+        last_page = self.total_pages
         if self.current_page != last_page:
             self.current_page = last_page
             self.update_group_list()
 
     def update_group_list(self):
+        """Update the duplicate group list"""
         self.image_view_area.clear()
 
         row_count = self.duplicate_group_list._max_rows
@@ -652,9 +655,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 if set_state:
                     tile.state = set_state
 
-        self.duplicate_group_list.update_page_indicator(self.current_page, self.last_page)
+        self.duplicate_group_list.update_page_indicator(self.current_page, self.total_pages)
 
     def on_match_state_changed(self, path: ZipPath, state):
+        """A tile has been clicked and the match state was changed"""
         self.file_states[path] = state
 
         for group in self.duplicate_group_list._rows:
@@ -664,6 +668,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # region File Path Selection display
     def build_file_path_selection_display(self):
+        """
+        Build the file path selection display,
+            which shows the selected file paths and the controls to add/remove them and re-order them
+        """
         # TODO: I need better icons here but I can't find the "in"/"out" icons in VP execution data...
 
         # region Selected File Path sort controls
@@ -704,6 +712,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return file_path_controls
 
     def file_path_up_clicked(self, _):
+        """Move the selected directory up in the ordering"""
+        # TODO: If the path has already been loaded for processing in the processor, then this won't do much
         for selected_index in self.selected_file_path_display.selectedIndexes():
             row = selected_index.row()
             if row == 0:
@@ -714,6 +724,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.selected_file_path_display.setCurrentIndex(self.selected_file_path_display.indexFromItem(item))
 
     def file_path_down_clicked(self, _):
+        """Move the selected directory up in the ordering"""
+        # TODO: If the path has already been loaded for processing in the processor, then this won't do much
         for selected_index in self.selected_file_path_display.selectedIndexes():
             row = selected_index.row()
             if row == self.selected_file_path_display.count():
@@ -724,6 +736,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.selected_file_path_display.setCurrentIndex(self.selected_file_path_display.indexFromItem(item))
 
     def file_path_in_clicked(self, _):
+        """Add the selected directory, and add to processing if processing has been started"""
         selected_indexes = self.file_system_view.selectedIndexes()
         for index in selected_indexes:
             info = self.file_system_view.model().fileInfo(index)
@@ -734,6 +747,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.processor.add_path(target_path)
 
     def file_path_out_clicked(self, _):
+        """Move the selected directory out of processing"""
+        # TODO: If the path has already been loaded for processing in the processor then all of the images
+        #   will still need to be hashed before the callback will discard the results...
         for selected_index in self.selected_file_path_display.selectedIndexes():
             selected_item = self.selected_file_path_display.takeItem(selected_index.row())
 
@@ -745,11 +761,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # region Image View area (bottom-right)
     def build_image_view_area(self):
+        """Build the image view area. Fairly simple now that the widget does most of the work"""
         self.preview_resized.changed.connect(self.preview_resized_changed)
         self.image_view_area = ImageViewPane()
         return self.image_view_area
 
     def preview_resized_changed(self):
+        """The preview sizing option has changed"""
         self.image_view_area.set_index(int(not self.preview_resized.isChecked()))
     # endregion
 
@@ -761,6 +779,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sb.addPermanentWidget(self.count_label)
 
     def process_file_states(self, states=None):
+        """Process the set file states"""
         self.image_view_area.clear()
 
         if not states:
@@ -768,9 +787,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         states.add(SelectionState.KEEP)
 
-        is_paused = self.processor.is_paused()
-        if not is_paused:
-            self.processor.pause()
+        is_paused = self.processor.conditional_pause()
 
         file_size_deleted = 0
         file_count_deleted = 0
@@ -782,7 +799,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 continue
 
             if set_state == SelectionState.DELETE:
-                # TODO: This is just for testing:
                 logger.info(f"Deleting {file}")
                 path = Path(file.path)
                 try:
@@ -800,20 +816,25 @@ class MainWindow(QtWidgets.QMainWindow):
             elif set_state == SelectionState.KEEP:
                 pass
 
+        # Clear the states which we have processed
         self.file_states = {
             k: v
             for k, v in self.file_states.items()
             if v not in states or k in failed_file_deletes
         }
 
-        if self.current_page > self.last_page:
-            self.current_page = self.last_page
+        # If total pages has decreased passed the current page, then make sure to set the current page
+        if self.current_page > self.total_pages:
+            self.current_page = self.total_pages
 
+        # Update the GUI:
         self.update_labels()
         self.update_group_list()
-        if not is_paused:
-            self.processor.resume()
 
+        # Resume processing
+        self.processor.conditional_resume(is_paused)
+
+        # region Final status popup
         popup_text = ""
 
         if file_count_deleted:
@@ -827,6 +848,20 @@ class MainWindow(QtWidgets.QMainWindow):
             dlg.setWindowTitle("Result")
             dlg.setText(popup_text)
             dlg.exec()
+        # endregion
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        """Stop the processor if closing, and confirm close if there is data loaded"""
+        if self.processor:
+            if len(self.processor.matches) and not self.confirm_close():
+                # There IS data loaded and user said NO to exiting
+                event.ignore()
+                return
+
+            if self.processor.running():
+                self.processor.finish()
+
+        event.accept()
 
     def confirm_close(self) -> bool:
         """
