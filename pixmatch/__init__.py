@@ -1,3 +1,8 @@
+# TODO: If a folder is processed, then a new folder is created in that folder,
+#  and that sub-folder is added for processing, it will never be ingested since its a subfolder of a processed folder.
+#   I'm not sure of a good solution for this... Perhaps when re-running, we should rescan all ingestion folders for new files?
+#   We'd actually need to keep track of ignored files though instead of just removing them from the system...
+
 import hashlib
 import logging
 import os
