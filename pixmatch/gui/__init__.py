@@ -6,14 +6,14 @@
 
 import logging
 
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from pixmatch import ImageMatcher, ImageMatch, NewGroup, NewMatch, Finished, ZipPath
-from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
-from pixmatch.gui.widgets import DuplicateGroupList, DirFileSystemModel, ImageViewPane, SelectionState
+from pixmatch import Finished, ImageMatch, ImageMatcher, NewGroup, NewMatch, ZipPath
+from pixmatch.gui.utils import MAX_SIZE_POLICY, NO_MARGIN
+from pixmatch.gui.widgets import DirFileSystemModel, DuplicateGroupList, ImageViewPane, SelectionState
 from pixmatch.utils import human_bytes
 
 ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
@@ -27,8 +27,9 @@ def ceildiv(a, b):
 
 
 def project_version() -> str:
+    """Get the version string to display in the title bar"""
     try:
-        return version("pixmatch")         # e.g. "myapp"
+        return version("pixmatch")
     except PackageNotFoundError:
         return "0.0.0+unknown"
 
@@ -69,6 +70,7 @@ class ProcessorThread(QtCore.QRunnable):
         self._poller.start()
 
     def _drain_events(self):
+        """Take events from the queue and forward them to the signals"""
         while not self.processor.events.empty():
             evt = self.processor.events.get_nowait()
             if isinstance(evt, NewGroup):
@@ -80,6 +82,7 @@ class ProcessorThread(QtCore.QRunnable):
                 self.signals.finish.emit()
 
     def run(self):
+        """Execute the processor"""
         self.processor.run(*self.args, **self.kwargs)
 
 
@@ -101,7 +104,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # State
         self.current_page: int = 1
         self.processor = None
-        self.file_states = dict()
+        self.file_states = {}
         self._threadpool = QtCore.QThreadPool()
 
         # UI build
@@ -124,7 +127,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.exit_warning.setIcon(QtWidgets.QMessageBox.Icon.Warning)
         self.exit_warning.setWindowTitle("Close?")
         self.exit_warning.setText("Are you sure you want to quit?")
-        self.exit_warning.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+        self.exit_warning.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
         self.exit_warning.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
         self.exit_warning.setEscapeButton(QtWidgets.QMessageBox.StandardButton.No)
         self.exit_warning.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
@@ -542,7 +547,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_new_match_group_found(self, match_group: ImageMatch):
         """New match group found callback, update the GUI with new match group"""
-        page_this_belongs_on, row_this_is = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
+        page_this_belongs_on, _ = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
         self.duplicate_group_list.update_page_indicator(self.current_page, self.total_pages)
 
         if self.current_page == page_this_belongs_on + 1:
@@ -646,7 +651,7 @@ class MainWindow(QtWidgets.QMainWindow):
         row_count = self.duplicate_group_list._max_rows
         self.duplicate_group_list.set_groups(
             [m.matches
-             for m in self.processor.matches[(self.current_page - 1) * row_count:self.current_page * row_count]]
+             for m in self.processor.matches[(self.current_page - 1) * row_count:self.current_page * row_count]],
         )
 
         for group in self.duplicate_group_list._rows:
@@ -671,6 +676,9 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Build the file path selection display,
             which shows the selected file paths and the controls to add/remove them and re-order them
+
+        Returns:
+            QtWidgets.QHBoxLayout: The file path selection display with associated controls in a layout
         """
         # TODO: I need better icons here but I can't find the "in"/"out" icons in VP execution data...
 
@@ -799,13 +807,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 continue
 
             if set_state == SelectionState.DELETE:
-                logger.info(f"Deleting {file}")
+                logger.info("Deleting %s", file)
                 path = Path(file.path)
                 try:
                     file_size_deleted += path.stat().st_size
                     path.unlink()
                 except PermissionError:
-                    logger.info(f"Failed to delete {file}, it is in use!")
+                    logger.info("Failed to delete %s, it is in use!", file)
                     failed_file_deletes.append(file)
                 else:
                     self.processor.remove(file)

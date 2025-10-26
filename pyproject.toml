@@ -87,15 +87,21 @@ extend-select = [
     "YTT",    # flake8-2020
 ]
 ignore=[
+    "ANN001",  # Missing type annotation for function argument X
+    "ANN002",  # Missing type annotation for *arg
+    "ANN003",  # Missing type annotation for arg
     "ANN201",  # Missing return type
     "D100",    # Missing docstring in public module
     "D104",    # Missing docstring in public package
     "D105",    # Missing docstring in magic method
+    "D107",    # Missing docstring in __init__ method
     "D202",    # Blank line after function docstring
+    "D205",    # 1 blank line required between summary line and description
     "D212",    # Multi-line docstring summary should start at the first line
     "D415",    # Closing punctuation on docstrings
     "PT013",   # Incorrect import of pytest
     "RUF023",  # __slots__ is not sorted
+    "RUF052",  # Local dummy variable X is accessed
     "TRY003",  # Avoid specifying long messages outside the exception class
 ]
 

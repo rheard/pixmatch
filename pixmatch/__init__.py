@@ -5,10 +5,10 @@ import time
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from multiprocessing import Pool, Manager
+from multiprocessing import Manager, Pool
 from pathlib import Path
 from threading import Event
-from typing import Union
+from typing import ClassVar, Union
 from zipfile import ZipFile
 
 import imagehash
@@ -36,16 +36,19 @@ class ZipPath:
     subpath: str
 
     @property
-    def path_obj(self):
+    def path_obj(self) -> Path:
+        """Get the path as as Path object"""
         return Path(self.path)
 
     @property
     def is_gif(self) -> bool:
+        """Is this a path to an animated image?"""
         movie_extensions = {'.gif', '.webp'}
         return (not self.subpath and Path(self.path).suffix.lower() in movie_extensions) \
             or (self.subpath and self.subpath[-4:].lower() in movie_extensions)
 
     def absolute(self):
+        """Get the absolute version of this ZipPath"""
         return ZipPath(str(self.path_obj.absolute()), self.subpath)
 
 
@@ -53,9 +56,10 @@ def _is_under(folder_abs: str, target: str | Path) -> bool:
     """Return True if the ZipPath's real file (zp.path) is inside folder_abs."""
     try:
         Path(target).absolute().relative_to(Path(folder_abs).absolute())
-        return True
     except ValueError:
         return False
+
+    return True
 
 
 def phash_params_for_strength(strength: int) -> tuple[int, int]:
@@ -68,33 +72,32 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
     # TODO: This sucks.
     strength = max(0, min(10, strength))
     if strength >= 10:
-        return 16, 4    # 256-bit hash, strict
-    elif strength >= 8:
+        return 16, 4
+    if strength >= 8:
         return 15, 4
-    elif strength >= 7:
+    if strength >= 7:
         return 13, 4
-    elif strength >= 6:
+    if strength >= 6:
         return 11, 4
-    elif strength >= 5:
+    if strength >= 5:
         return 9, 4
-    elif strength >= 4:
+    if strength >= 4:
         return 8, 4
-    elif strength >= 3:
+    if strength >= 3:
         return 8, 3
-    elif strength >= 2:
+    if strength >= 2:
         return 7, 3
-    else:
-        return 6, 3
+    return 6, 3
 
 
-def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
+def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> list:
     """
     Calculate hashes for a given file.
 
     Args:
         f (IO or str or Path): Either a file path to process, or a in-memory BytesIO object ready for reading.
-        is_gif (bool): Is this gif data? Needed if passing an in-memory BytesIO object.
         strength (int): A number between 0 and 10 on the strength of the matches.
+        is_gif (bool): Is this gif data? Needed if passing an in-memory BytesIO object.
         exact_match (bool): Use exact SHA256 hahes?
             If true, strength must be 10.
             If false, perceptual hashes will be used, even with high strength.
@@ -105,7 +108,7 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
     if exact_match:
         hasher = hashlib.sha256()
         block_size = 65536
-        with (open(f, "rb") if isinstance(f, (str, Path)) else f) as file:
+        with (open(f, "rb") if isinstance(f, (str, Path)) else f) as file:  # noqa: PTH123
             for block in iter(lambda: file.read(block_size), b""):
                 hasher.update(block)
         return [hasher.hexdigest()]
@@ -129,7 +132,7 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
                            for r_i, r in enumerate(initial_hash.hash)):
                 try:
                     im.seek(im.tell() + 1)
-                except EOFError:
+                except EOFError:  # noqa: PERF203
                     break
                 else:
                     initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
@@ -137,7 +140,10 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
 
             # For GIFs we'll look for mirrored versions but thats it
             flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-            return [initial_hash, imagehash.phash(flipped_h_image, hash_size=hash_size, highfreq_factor=highfreq_factor)]
+            return [
+                initial_hash,
+                imagehash.phash(flipped_h_image, hash_size=hash_size, highfreq_factor=highfreq_factor),
+            ]
 
         flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         flipped_v_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
@@ -147,14 +153,19 @@ def calculate_hashes(f, is_gif=False, strength=5, exact_match=False):
         return [imagehash.phash(image, hash_size=hash_size, highfreq_factor=highfreq_factor) for image in images]
 
 
-def _process_image(path: str | Path, strength=5, exact_match=False):
+def _process_image(
+        path: str | Path,
+        strength: int = 5,
+        *,
+        exact_match: bool = False,
+) -> tuple[Path, list | dict[str, list]]:
     """Get the hashes for a given path. Is multiprocessing compatible"""
     path = Path(path)
     if path.suffix.lower() != '.zip':
         return path, calculate_hashes(path, is_gif=path.suffix.lower() in {".gif", ".webp"},
                                       strength=strength, exact_match=exact_match)
 
-    results = dict()
+    results = {}
     with ZipFile(path) as zf:
         for f in zf.filelist:
             with zf.open(f) as zipped_file:
@@ -188,7 +199,6 @@ class NewMatch:
 @dataclass(frozen=True)
 class Finished:
     """A finished event"""
-    pass
 
 
 MatcherEvent = Union[NewGroup, NewMatch, Finished]
@@ -206,10 +216,10 @@ class ImageMatcher:
         processes (int): The number of processes to use. Defaults to None.
         extensions (set): The extensions to process. Optional.
     """
-    SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
+    SUPPORTED_EXTS: ClassVar = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
 
-    def __init__(self, strength: int = 5, exact_match: bool = False, processes: int | None = None,
-                 extensions: set | None = None):
+    def __init__(self, strength: int = 5, processes: int | None = None, extensions: set | None = None,
+                 *, exact_match: bool = False):
         if not (0 <= strength <= 10):
             raise ValueError("Strength must be between 0 and 10!")
 
@@ -230,7 +240,7 @@ class ImageMatcher:
         self._removed_paths = set()  # Paths that have been removed from processing after processing has been started
         self._processed_paths = set()  # Paths that have been successfully processed
         self._hashes = defaultdict(ImageMatch)  # Hash -> Paths
-        self._reverse_hashes = dict()  # Path -> Hash
+        self._reverse_hashes = {}  # Path -> Hash
 
         # Pausing and finished signaling...
         self._not_paused = Event()
@@ -263,7 +273,7 @@ class ImageMatcher:
 
         # Remove anything we've already seen under that folder
         # (iterate over a copy because remove() mutates structures)
-        to_remove = [p for p in self._reverse_hashes.keys() if _is_under(folder, p.path)]
+        to_remove = [p for p in self._reverse_hashes if _is_under(folder, p.path)]
         for p in to_remove:
             self.remove(p)
 
@@ -278,7 +288,7 @@ class ImageMatcher:
 
         return _conditional_pause
 
-    def conditional_resume(self, was_paused: bool):
+    def conditional_resume(self, was_paused: bool):  # noqa: FBT001
         """Resume if not paused previous (from call to `conditional_pause`)"""
         if not was_paused and not self.is_finished():
             logger.debug('Performing conditional resume')
@@ -317,20 +327,20 @@ class ImageMatcher:
         logger.info('Removing %s from %s', path, self.__class__.__name__)
         paused = self.conditional_pause()
 
-        hash = self._reverse_hashes.pop(path)
-        self._hashes[hash].matches.remove(path)
-        if len(self._hashes[hash].matches) == 1:
-            match_i = self._hashes[hash].match_i
+        hash_ = self._reverse_hashes.pop(path)
+        self._hashes[hash_].matches.remove(path)
+        if len(self._hashes[hash_].matches) == 1:
+            match_i = self._hashes[hash_].match_i
             logger.debug('Unmatching match group %s', match_i)
-            self._hashes[hash].match_i = None
+            self._hashes[hash_].match_i = None
 
             del self.matches[match_i]
             self.refresh_match_indexes(match_i)
             self.duplicate_images -= 2
 
-        elif not self._hashes[hash].matches:
+        elif not self._hashes[hash_].matches:
             logger.debug('Removing empty match group')
-            del self._hashes[hash]
+            del self._hashes[hash_]
 
         else:
             logger.debug('Simple removal performed')
@@ -427,11 +437,12 @@ class ImageMatcher:
             return
 
     def _process_image_error_callback(self, e):
+        """Temporary for testing"""
         self.processed_images += 1
-        print(str(e))
+        logger.error(str(e))
 
     def _root_stream(self):
-        # Yield any paths that come up for processing, then wait until processing is finished for any new paths
+        """This is to yield any paths for processing, then wait until processing is finished for any new paths"""
         while not self._new_paths.empty() or self.left_to_process:
             if self._new_paths.empty():
                 time.sleep(0.05)
@@ -440,6 +451,7 @@ class ImageMatcher:
             yield self._new_paths.get_nowait()
 
     def run(self, paths: list[str | Path]):
+        """Do the work of matching!"""
         self._not_paused.set()
         self._finished.clear()
 
@@ -457,7 +469,7 @@ class ImageMatcher:
                 if path in self._removed_paths or path in self._processed_paths:
                     continue
 
-                for root, dirs, files in os.walk(path):
+                for root, _, files in os.walk(path):
                     if self.is_finished():
                         break
 

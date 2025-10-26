@@ -1,11 +1,4 @@
-import os
-
-from enum import Enum, auto
-from typing import Dict, Iterable, List, Sequence
-
-from PIL import Image
-from PySide6 import QtCore, QtGui, QtWidgets
-
+from PySide6 import QtCore, QtWidgets
 
 NO_MARGIN = QtCore.QMargins(0, 0, 0, 0)
 

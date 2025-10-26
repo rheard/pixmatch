@@ -2,15 +2,15 @@
 
 from datetime import datetime, timezone
 from enum import Enum, auto
-from functools import cache, lru_cache
+from functools import cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Iterable, Sequence
 from zipfile import ZipFile
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pixmatch import ZipPath
-from pixmatch.gui.utils import NO_MARGIN, MAX_SIZE_POLICY
+from pixmatch.gui.utils import MAX_SIZE_POLICY, NO_MARGIN
 from pixmatch.utils import human_bytes
 
 ZIP_ICON_PATH = Path(__file__).resolve().parent / 'zip.png'
@@ -51,7 +51,7 @@ def movie_size(movie: QtGui.QMovie):
     """Get the max dimensions of a QMovie"""
     movie.jumpToFrame(0)
     rect = QtCore.QRect()
-    for i in range(movie.frameCount()):
+    for _ in range(movie.frameCount()):
         movie.jumpToNextFrame()
         rect |= movie.frameRect()
     width = rect.x() + rect.width()
@@ -63,7 +63,7 @@ def movie_size(movie: QtGui.QMovie):
 def movie_uncompressed_filesize(movie: QtGui.QMovie):
     """Get the uncompressed size of a QMovie"""
     file_size = 0
-    for i in range(movie.frameCount()):
+    for _ in range(movie.frameCount()):
         movie.jumpToNextFrame()
         img = movie.currentImage()
         file_size += img.sizeInBytes()
@@ -245,7 +245,7 @@ class ImageViewPane(QtWidgets.QWidget):
             f"{human_bytes(file_size)} {extra}"
             f"- {object_size.width()},{object_size.height()}px "
             f"- {modified}"
-            f")"
+            f")",
         )
         # endregion
 
@@ -276,21 +276,24 @@ class ScaledLabel(QtWidgets.QLabel):
             self.orig_movie = None
 
     def minimumSizeHint(self):
+        """Hijack minimumSizeHint"""
         # TODO: I don't know that this whole _minSize thing is required
         if self._minSize.isValid():
             return self._minSize
         return super().minimumSizeHint()
 
     def setPixmap(self, pixmap):
+        """Hijack setPixmap"""
         # TODO: I'm not sure why I added this if statement but I think it can go after self.clear?
         if not pixmap:
-            return
+            return None
 
         self.clear()
         self.orig_pixmap = pixmap
         return super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.AspectRatioMode.KeepAspectRatio))
 
     def setMovie(self, movie):
+        """Hijack setMovie"""
         if self.movie() == movie:
             return
         if self.orig_movie and movie:
@@ -322,6 +325,7 @@ class ScaledLabel(QtWidgets.QLabel):
         self.updateGeometry()
 
     def paintEvent(self, event):
+        """Update things on resize"""
         movie = self.movie()
         if not isinstance(movie, QtGui.QMovie) or not movie.isValid():
             super().paintEvent(event)
@@ -344,13 +348,13 @@ class ScaledLabel(QtWidgets.QLabel):
             movie.setScaledSize(maybeSize)
             style.drawItemPixmap(
                 qp, cr, alignment,
-                movie.currentPixmap().scaled(cr.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+                movie.currentPixmap().scaled(cr.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio),
             )
 
         else:
             style.drawItemPixmap(
                 qp, cr, alignment,
-                movie.currentPixmap()
+                movie.currentPixmap(),
             )
 # endregion
 
@@ -358,6 +362,7 @@ class ScaledLabel(QtWidgets.QLabel):
 # region Thumbnail tile panel
 @cache
 def get_overlay_icon(height, width):
+    """Get the zip overlay icon"""
     return QtGui.QPixmap(ZIP_ICON_PATH).scaled(
         int(height), int(width),
         QtCore.Qt.AspectRatioMode.KeepAspectRatio,
@@ -401,7 +406,7 @@ class ThumbnailTile(QtWidgets.QFrame):
             _overlay_icon = QtWidgets.QLabel(self._image)  # child of the tile so it floats over the image
             _overlay_icon.setObjectName("LockOverlay")
             _overlay_icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            _overlay_icon.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            _overlay_icon.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, on=True)
             _overlay_icon.setFixedSize(thumb_size, thumb_size)  # small badge; adjust later if you want
             _overlay_icon.setPixmap(get_overlay_icon(thumb_size / 1.5, thumb_size / 1.5))
 
@@ -438,10 +443,12 @@ class ThumbnailTile(QtWidgets.QFrame):
 
     @property
     def path(self) -> ZipPath:
+        """Get the internal file path"""
         return self._path
 
     @property
     def state(self) -> SelectionState:
+        """Get the internal state"""
         return self._state
 
     @state.setter
@@ -497,7 +504,7 @@ class ThumbnailTile(QtWidgets.QFrame):
                 border-radius: 6px;
                 font-weight: 600;
             }}
-            """
+            """,
         )
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent):
@@ -519,7 +526,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
 
     def __init__(self, images: Sequence[ZipPath], thumb_size: int = 32, parent=None):
         super().__init__(parent)
-        self._tiles: List[ThumbnailTile] = []
+        self._tiles: list[ThumbnailTile] = []
         self._thumb_size = thumb_size
         self.layout = QtWidgets.QHBoxLayout(self)
         self.layout.setContentsMargins(NO_MARGIN)
@@ -531,9 +538,11 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         self.layout.addStretch(1)
 
     def tiles(self) -> Iterable[ThumbnailTile]:
+        """Fetch all the tiles (in a copy)"""
         return list(self._tiles)
 
     def add_tile(self, path: ZipPath):
+        """Add a new tile to this duplicate group"""
         try:
             # This is just a personal thing...
             #   I've found duplicates in my zips, gone and cleaned them,
@@ -572,7 +581,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         self._vbox.setContentsMargins(NO_MARGIN)
         self._vbox.setSpacing(0)
         _tail_spacer = QtWidgets.QSpacerItem(
-            0, 0, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding
+            0, 0, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding,
         )
         self._vbox.addItem(_tail_spacer)
         self._scroll.setWidget(self._container)
@@ -583,7 +592,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         outer.setSpacing(0)
         outer.addWidget(self._scroll)
 
-        self._rows: List[DuplicateGroupRow] = []
+        self._rows: list[DuplicateGroupRow] = []
 
         # Status bar
         _status = QtWidgets.QHBoxLayout()
@@ -621,7 +630,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         for group in groups[: self._max_rows]:
             self.add_group(group)
 
-    def update_page_indicator(self, current_page, total_pages):
+    def update_page_indicator(self, current_page: int, total_pages: int):
         """Update page indicator label"""
         self.page_indicator.setText(f"Page {current_page} of {total_pages}")
 
@@ -644,6 +653,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
                 tile.state = SelectionState.KEEP
 
     def clear(self):
+        """Reset this widget"""
         for row in self._rows:
             row.setParent(None)
             row.deleteLater()
@@ -659,6 +669,7 @@ class DirFileSystemModel(QtWidgets.QFileSystemModel):
     """
 
     def hasChildren(self, /, parent: QtCore.QModelIndex | QtCore.QPersistentModelIndex = ...):
+        """Return true only if there are files as children"""
         file_info = self.fileInfo(parent)
-        _dir = QtCore.QDir(file_info.absoluteFilePath())
-        return bool(_dir.entryList(self.filter()))
+        dir_ = QtCore.QDir(file_info.absoluteFilePath())
+        return bool(dir_.entryList(self.filter()))

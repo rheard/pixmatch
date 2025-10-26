@@ -1,12 +1,11 @@
 from typing import Iterable
 
-
 def human_bytes(
         n: int,
         *,
         base: int = 1000,
         decimals: int = 0,
-        units: Iterable[str] = ("b", "kb", "mb", "gb", "tb", "pb", "eb", "zb", "yb")
+        units: Iterable[str] = ("b", "kb", "mb", "gb", "tb", "pb", "eb", "zb", "yb"),
 ) -> str:
     """
     Convert a byte count to a human-readable string.
@@ -19,6 +18,9 @@ def human_bytes(
 
     Returns:
         A compact string like '66kb', '1mb', '1.5gb', or '999b'.
+
+    Raises:
+        ValueError: If n < 0
     """
     if n < 0:
         raise ValueError("Byte size cannot be negative")
@@ -31,6 +33,6 @@ def human_bytes(
 
     if i == 0 or decimals == 0:
         # Bytes or integer formatting requested
-        return f"{int(n if i else n)}{tuple(units)[i]}"
+        return f"{int(n)}{tuple(units)[i]}"
 
     return f"{n:.{decimals}f}{tuple(units)[i]}".rstrip("0").rstrip(".")
