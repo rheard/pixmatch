@@ -814,9 +814,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 except PermissionError:
                     logger.info("Failed to delete %s, it is in use!", file)
                     failed_file_deletes.append(file)
-                else:
-                    self.processor.remove(file)
-                    file_count_deleted += 1
+                except FileNotFoundError:
+                    logger.info("File already deleted...", file)
+
+                self.processor.remove(file)
+                file_count_deleted += 1
             elif set_state == SelectionState.IGNORE:
                 self.processor.remove(file)
                 file_count_ignored += 1
