@@ -243,7 +243,7 @@ class ImageMatcher:
         self.events = m.Queue()  # Events to go to higher level users
         self._new_paths = m.Queue()  # Inbound queue for new paths that are added while processing is running
         self._removed_paths = set()  # Paths that have been removed from processing after processing has been started
-        self._processed_paths = set()  # Paths that have been successfully processed
+        self._processed_zips = set()  # Zips that have been successfully processed
         self._hashes = defaultdict(ImageMatch)  # Hash -> Paths
         self._reverse_hashes = {}  # Path -> Hash
 
@@ -274,13 +274,16 @@ class ImageMatcher:
         folder = str(Path(folder).absolute())
         paused = self.conditional_pause()
         self._removed_paths.add(folder)
-        self._processed_paths.discard(folder)
 
         # Remove anything we've already seen under that folder
         # (iterate over a copy because remove() mutates structures)
         to_remove = [p for p in self._reverse_hashes if _is_under(folder, p.path)]
         for p in to_remove:
             self.remove(p)
+
+        to_remove_zips = [p for p in self._processed_zips if _is_under(folder, p)]
+        for p in to_remove_zips:
+            self._processed_zips.remove(p)
 
         self.conditional_resume(paused)
 
@@ -396,6 +399,7 @@ class ImageMatcher:
             for sub_path, sub_hashes in hashes.items():
                 self.found_images += 1
                 self._process_image_callback((ZipPath(str(path), sub_path), sub_hashes))
+            self._processed_zips.add(str(path))
             return
 
         if not isinstance(path, ZipPath):
@@ -471,7 +475,7 @@ class ImageMatcher:
                     continue
 
                 path = str(path.absolute())
-                if path in self._removed_paths or path in self._processed_paths:
+                if path in self._removed_paths:
                     continue
 
                 for root, _, files in os.walk(path):
@@ -496,8 +500,10 @@ class ImageMatcher:
                         if any(_is_under(d, f) for d in self._removed_paths):
                             continue
 
-                        # TODO: This sucks (for zips at least), but I can't iterate over the dict while its changing...
-                        if ZipPath(str(f), "") in self._reverse_hashes:
+                        if f.suffix.lower() == '.zip':
+                            if str(f.absolute()) in self._processed_zips:
+                                continue
+                        elif ZipPath(str(f), "") in self._reverse_hashes:
                             continue
 
                         self.found_images += 1
@@ -511,8 +517,6 @@ class ImageMatcher:
                             callback=self._process_image_callback,
                             error_callback=self._process_image_error_callback,
                         )
-
-                self._processed_paths.add(path)
 
             tp.close()
 
