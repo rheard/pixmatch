@@ -846,6 +846,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 except PermissionError:
                     logger.info("Failed to delete %s, it is in use!", file)
                     failed_file_deletes.append(file)
+                    continue
                 except FileNotFoundError:
                     logger.info("File already deleted...", file)
 
