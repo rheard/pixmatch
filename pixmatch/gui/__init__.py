@@ -820,7 +820,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.processor.remove(file)
                 file_count_deleted += 1
             elif set_state == SelectionState.IGNORE:
-                self.processor.remove(file)
+                self.processor.ignore(file)
                 file_count_ignored += 1
             elif set_state == SelectionState.KEEP:
                 pass

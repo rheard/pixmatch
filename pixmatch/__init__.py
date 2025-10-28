@@ -243,7 +243,8 @@ class ImageMatcher:
         self.events = m.Queue()  # Events to go to higher level users
         self._new_paths = m.Queue()  # Inbound queue for new paths that are added while processing is running
         self._removed_paths = set()  # Paths that have been removed from processing after processing has been started
-        self._processed_zips = set()  # Zips that have been successfully processed
+        self._ignored_files = set()  # Files which have been ignored and should be skipped from processing if re-ran
+        self._processed_zips = {}  # Zips that have been successfully processed
         self._hashes = defaultdict(ImageMatch)  # Hash -> Paths
         self._reverse_hashes = {}  # Path -> Hash
 
@@ -283,7 +284,7 @@ class ImageMatcher:
 
         to_remove_zips = [p for p in self._processed_zips if _is_under(folder, p)]
         for p in to_remove_zips:
-            self._processed_zips.remove(p)
+            self._processed_zips.pop(p)
 
         self.conditional_resume(paused)
 
@@ -358,6 +359,13 @@ class ImageMatcher:
         self.found_images -= 1
         self.conditional_resume(paused)
 
+    def ignore(self, path):
+        """Remove a path from the image matching service"""
+        self.remove(path)
+
+        if path.path_obj.suffix.lower() != '.zip':
+            self._ignored_files.add(path.path)
+
     def refresh_match_indexes(self, start=0):
         """Update the match_i value for all the matches passed a certain point"""
         for match_i, match in enumerate(self.matches[start:], start=start):
@@ -396,10 +404,12 @@ class ImageMatcher:
 
         if isinstance(hashes, dict):
             self.found_images -= 1
+            subpaths = []
             for sub_path, sub_hashes in hashes.items():
                 self.found_images += 1
-                self._process_image_callback((ZipPath(str(path), sub_path), sub_hashes))
-            self._processed_zips.add(str(path))
+                subpaths.append(ZipPath(str(path), sub_path))
+                self._process_image_callback((subpaths[-1], sub_hashes))
+            self._processed_zips[str(path)] = subpaths
             return
 
         if not isinstance(path, ZipPath):
@@ -498,6 +508,9 @@ class ImageMatcher:
                             continue
 
                         if any(_is_under(d, f) for d in self._removed_paths):
+                            continue
+
+                        if str(f) in self._ignored_files:
                             continue
 
                         if f.suffix.lower() == '.zip':
