@@ -156,16 +156,20 @@ class MainWindow(QtWidgets.QMainWindow):
         mark_ignore = QtGui.QAction("Ignore", self, enabled=False)
         mark_ignore_group = QtGui.QAction("Ignore Group", self, enabled=False)
         mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
+        mark_ignore_zip = QtGui.QAction("Ignore Zip", self)
         mark_rename = QtGui.QAction("Rename this file...", self, enabled=False)
         mark_move = QtGui.QAction("Move this file...", self, enabled=False)
         mark_symlink = QtGui.QAction("Symlink this file...", self, enabled=False)
         unmark = QtGui.QAction("Un-select", self, enabled=False)
+
+        mark_ignore_zip.triggered.connect(self.mark_ignore_zip)
 
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(mark_delete)
         edit_menu.addAction(mark_ignore)
         edit_menu.addAction(mark_ignore_group)
         edit_menu.addAction(mark_ignore_folder)
+        edit_menu.addAction(mark_ignore_zip)
         edit_menu.addSeparator()
         edit_menu.addAction(mark_rename)
         edit_menu.addAction(mark_move)
@@ -643,6 +647,34 @@ class MainWindow(QtWidgets.QMainWindow):
             self.current_page = last_page
             self.update_group_list()
 
+    def mark_ignore_zip(self, *_):
+        """Mark all files in a zip as ignore"""
+        currently_paused = self.processor.conditional_pause()
+        current_zip_path = self.image_view_area.current_path
+
+        if not current_zip_path:
+            return
+
+        if current_zip_path.path_obj.suffix.lower() != '.zip':
+            return  # TODO: Pop warning dialog
+
+        for path in self.processor._processed_zips[current_zip_path.path]:
+            found = False
+
+            for group in self.duplicate_group_list._rows:
+                for tile in group.tiles():
+                    if tile.path == path:
+                        # Set the tile state. This should get forwarded to the on state changed signal
+                        tile.state = SelectionState.IGNORE
+                        found = True
+                        break
+
+            if not found:
+                # This must be on another page
+                self.file_states[path] = SelectionState.IGNORE
+
+        self.processor.conditional_resume(currently_paused)
+
     def update_group_list(self):
         """Update the duplicate group list"""
         self.image_view_area.clear()
@@ -807,7 +839,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
             if set_state == SelectionState.DELETE:
                 logger.info("Deleting %s", file)
-                path = Path(file.path)
+                path = file.path_obj
                 try:
                     file_size_deleted += path.stat().st_size
                     path.unlink()
