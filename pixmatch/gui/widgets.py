@@ -173,12 +173,15 @@ class ImageViewPane(QtWidgets.QWidget):
         # We're setting an image...
         if path.subpath:
             # Need to load image from a zipfile
-            with ZipFile(path.path) as zf:
-                st = zf.getinfo(path.subpath)
-                modified = st.date_time
-                file_size = st.file_size
-                pixmap = QtGui.QPixmap()
-                pixmap.loadFromData(zf.read(path.subpath))
+            try:
+                with ZipFile(path.path) as zf:
+                    st = zf.getinfo(path.subpath)
+                    modified = st.date_time
+                    file_size = st.file_size
+                    pixmap = QtGui.QPixmap()
+                    pixmap.loadFromData(zf.read(path.subpath))
+            except KeyError:
+                return QtGui.QPixmap(), 0, tuple()
         else:
             # Basic image path
             pixmap = QtGui.QPixmap(str(path.path))
