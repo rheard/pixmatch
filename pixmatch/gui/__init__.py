@@ -438,6 +438,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duplicate_group_list.page_up.pressed.connect(self.on_page_up)
         self.duplicate_group_list.first_page.pressed.connect(self.on_page_first)
         self.duplicate_group_list.last_page.pressed.connect(self.on_page_last)
+        self.duplicate_group_list.pageIndicatorClicked.connect(self.on_page_jump_request)
         outer_splitter.addWidget(self.duplicate_group_list)
         outer_splitter.addWidget(inner_splitter)
 
@@ -605,6 +606,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_loaded_pictures_label(self.processor.processed_images)
         self.set_duplicate_groups_label(len(self.processor.matches))
         self.set_duplicate_images_label(self.processor.duplicate_images)
+
+    def on_page_jump_request(self):
+        """
+        Prompt for a page number and jump there.
+        Uses a numeric-only dialog with range [1, total_pages].
+        """
+        total = self.total_pages
+        if total == 1:
+            return
+
+        val, ok = QtWidgets.QInputDialog.getInt(
+            self,
+            "Go to page",
+            f"Enter a page number (1–{total}):",
+            value=self.current_page,
+            minValue=1,
+            maxValue=total,
+        )
+        if not ok:
+            return
+
+        if val != self.current_page:
+            self.current_page = val
+            self.update_group_list()
 
     def on_page_down(self, *_):
         """The page down button has been pressed"""

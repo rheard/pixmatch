@@ -556,6 +556,18 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         self.layout.insertWidget(len(self._tiles) - 1, tile)
 
 
+class ClickableLabel(QtWidgets.QLabel):
+    """QLabel that emits a `clicked` signal on left mouse release."""
+    clicked = QtCore.Signal()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+
 class DuplicateGroupList(QtWidgets.QWidget):
     """
     Scrollable list of duplicate groups. Each group renders as a row of thumbnails.
@@ -567,6 +579,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
 
     groupTileStateChanged = QtCore.Signal(ZipPath, SelectionState)  # path, state
     groupTileHovered = QtCore.Signal(ZipPath)
+    pageIndicatorClicked = QtCore.Signal()
 
     def __init__(self, parent=None, *, max_rows: int = 25, thumb_size: int = 64, **kwargs):
         super().__init__(parent, **kwargs)
@@ -596,7 +609,9 @@ class DuplicateGroupList(QtWidgets.QWidget):
         _status = QtWidgets.QHBoxLayout()
         self.first_page = QtWidgets.QPushButton("<<")
         self.page_down = QtWidgets.QPushButton("<")
-        self.page_indicator = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.page_indicator = ClickableLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.page_indicator.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.page_indicator.clicked.connect(self.pageIndicatorClicked)
         self.page_up = QtWidgets.QPushButton(">")
         self.last_page = QtWidgets.QPushButton(">>")
         _status.addWidget(self.first_page)
