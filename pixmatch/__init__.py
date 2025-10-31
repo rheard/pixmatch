@@ -95,7 +95,7 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
     return 6, 3
 
 
-def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> list:
+def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple[str, set[str]]:
     """
     Calculate hashes for a given file.
 
@@ -108,7 +108,8 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> list:
             If false, perceptual hashes will be used, even with high strength.
 
     Returns:
-        list: The found hashes.
+        tuple[str, set]: The first element is the primary hash,
+            the second element are any secondary hashes representing rotations, flips, etc...
     """
     if exact_match:
         hasher = hashlib.sha256()
@@ -116,7 +117,7 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> list:
         with (open(f, "rb") if isinstance(f, (str, Path)) else f) as file:  # noqa: PTH123
             for block in iter(lambda: file.read(block_size), b""):
                 hasher.update(block)
-        return [hasher.hexdigest()]
+        return hasher.hexdigest(), set()
 
     hash_size, highfreq_factor = phash_params_for_strength(strength)
     with Image.open(f) as im:
@@ -145,17 +146,21 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> list:
 
             # For GIFs we'll look for mirrored versions but thats it
             flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-            return [
-                str(initial_hash),
-                str(imagehash.phash(flipped_h_image, hash_size=hash_size, highfreq_factor=highfreq_factor)),
-            ]
+            extras = (flipped_h_image, )
+        else:
+            initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
 
-        flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-        flipped_v_image = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-        images = (im, im.rotate(90), im.rotate(180), im.rotate(270),
-                  flipped_h_image, flipped_h_image.rotate(90), flipped_h_image.rotate(180), flipped_h_image.rotate(270),
-                  flipped_v_image, flipped_v_image.rotate(90), flipped_v_image.rotate(180), flipped_v_image.rotate(270))
-        return [str(imagehash.phash(image, hash_size=hash_size, highfreq_factor=highfreq_factor)) for image in images]
+            flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            flipped_v_image = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+            extras = (im.rotate(90), im.rotate(180), im.rotate(270),
+                      flipped_h_image, flipped_h_image.rotate(90), flipped_h_image.rotate(180),
+                      flipped_h_image.rotate(270),
+                      flipped_v_image, flipped_v_image.rotate(90), flipped_v_image.rotate(180),
+                      flipped_v_image.rotate(270))
+
+        return str(initial_hash), {
+            str(imagehash.phash(image, hash_size=hash_size, highfreq_factor=highfreq_factor)) for image in extras
+        }
 
 
 def _process_image(
@@ -163,7 +168,7 @@ def _process_image(
         strength: int = 5,
         *,
         exact_match: bool = False,
-) -> tuple[Path, list | dict[str, list]]:
+) -> tuple[Path, tuple | dict[str, tuple]]:
     """Get the hashes for a given path. Is multiprocessing compatible"""
     path = Path(path)
     if path.suffix.lower() != '.zip':
@@ -413,6 +418,8 @@ class ImageMatcher:
             self._processed_zips[str(path)] = subpaths
             return
 
+        initial_hash, extra_hashes = hashes
+        extra_hashes.add(initial_hash)
         if not isinstance(path, ZipPath):
             # From this point on, EVERYTHING should be a ZipPath
             path = ZipPath(str(path), "")
@@ -423,38 +430,34 @@ class ImageMatcher:
             return
 
         self.processed_images += 1
-        for hash_ in hashes:
-            # Of all the hashes returned, which may contain hashes for rotations/mirrors, look for matches...
-            if hash_ not in self._hashes:
-                continue
-
-            # We have found a match!
-            self._reverse_hashes[path] = hash_
-            self._hashes[hash_].matches.append(path)
-
-            if self._hashes[hash_].match_i is None and len(self._hashes[hash_].matches) >= 2:
-                # This is a brand new match group!
-                self._hashes[hash_].match_i = len(self.matches)
-                self.matches.append(self._hashes[hash_])
-                self.duplicate_images += 2
-                self.events.put(NewGroup(self._hashes[hash_]))
-                logger.debug('New match group found: %s', self._hashes[hash_].matches)
-            else:
-                # Just another match for an existing group...
-                self.duplicate_images += 1
-                self.events.put(NewMatch(self._hashes[hash_], path))
-                logger.debug('New match found for group #%s: %s',
-                             self._hashes[hash_].match_i,
-                             self._hashes[hash_].matches)
-
-            break
-        else:
+        found_hashes = self._hashes.keys() & extra_hashes
+        if not found_hashes:
             # This is a new image not matching any previous, so just add it to the hashmap and move on...
             #   Just use the initial orientation
-            hash_ = hashes[0]
+            hash_ = initial_hash
             self._reverse_hashes[path] = hash_
             self._hashes[hash_].matches.append(path)
             return
+
+        # We have found a match!
+        hash_ = next(iter(found_hashes))
+        self._reverse_hashes[path] = hash_
+        self._hashes[hash_].matches.append(path)
+
+        if self._hashes[hash_].match_i is None and len(self._hashes[hash_].matches) >= 2:
+            # This is a brand new match group!
+            self._hashes[hash_].match_i = len(self.matches)
+            self.matches.append(self._hashes[hash_])
+            self.duplicate_images += 2
+            self.events.put(NewGroup(self._hashes[hash_]))
+            logger.debug('New match group found: %s', self._hashes[hash_].matches)
+        else:
+            # Just another match for an existing group...
+            self.duplicate_images += 1
+            self.events.put(NewMatch(self._hashes[hash_], path))
+            logger.debug('New match found for group #%s: %s',
+                         self._hashes[hash_].match_i,
+                         self._hashes[hash_].matches)
 
     def _process_image_error_callback(self, e):
         """Temporary for testing"""
