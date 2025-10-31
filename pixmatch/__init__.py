@@ -146,16 +146,16 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> list:
             # For GIFs we'll look for mirrored versions but thats it
             flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
             return [
-                initial_hash,
-                imagehash.phash(flipped_h_image, hash_size=hash_size, highfreq_factor=highfreq_factor),
+                str(initial_hash),
+                str(imagehash.phash(flipped_h_image, hash_size=hash_size, highfreq_factor=highfreq_factor)),
             ]
 
         flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-        flipped_v_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        flipped_v_image = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
         images = (im, im.rotate(90), im.rotate(180), im.rotate(270),
                   flipped_h_image, flipped_h_image.rotate(90), flipped_h_image.rotate(180), flipped_h_image.rotate(270),
                   flipped_v_image, flipped_v_image.rotate(90), flipped_v_image.rotate(180), flipped_v_image.rotate(270))
-        return [imagehash.phash(image, hash_size=hash_size, highfreq_factor=highfreq_factor) for image in images]
+        return [str(imagehash.phash(image, hash_size=hash_size, highfreq_factor=highfreq_factor)) for image in images]
 
 
 def _process_image(
@@ -388,6 +388,7 @@ class ImageMatcher:
         """
         # TODO: This callback must return IMMEDIATELY and is currently too slow for large amounts of zips.
         #   Perhaps create a new queue/thread and queue up processing for zip results?
+        #   I think the major slow point is adding to the data structures and I'm not sure if more threads will help
         # Check for paused or finished signals
         self._not_paused.wait()
         if self.is_finished():
