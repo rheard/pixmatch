@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from enum import Enum, auto
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Iterable, Sequence
 from zipfile import ZipFile
@@ -132,18 +132,13 @@ class ImageViewPane(QtWidgets.QWidget):
 
     def clear(self):
         """Clear and reset the current object, and the two sub-objects"""
-        existing_movie = self.raw_label.movie()
-        if existing_movie:
-            existing_movie.device().close()
-            existing_movie.stop()
-            existing_movie.deleteLater()
-
         self.raw_label.clear()
         self.scaled.clear()
 
-    # TODO: Find a way to cache the following two methods.
-    #   The cache may need to be cleared in the event of deletion so no files are left open
-    # @lru_cache(maxsize=5)
+        self.get_movie.cache_clear()
+        self.get_pixmap.cache_clear()
+
+    @lru_cache(maxsize=5)
     def get_movie(self, path: ZipPath) -> tuple[QtGui.QMovie, int, tuple]:
         """Load a QMovie and details from either a zip or just the file system"""
         file_size = modified = None
@@ -166,7 +161,7 @@ class ImageViewPane(QtWidgets.QWidget):
 
         return movie, file_size, modified
 
-    # @lru_cache(maxsize=10)
+    @lru_cache(maxsize=10)
     def get_pixmap(self, path: ZipPath) -> tuple[QtGui.QPixmap, int, tuple]:
         """Load a QPixmap and details from either a zip or just the file system"""
         file_size = modified = None
