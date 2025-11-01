@@ -153,6 +153,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # region Edit menu
         # TODO: When adding this, make sure not to allow marking a zip file as delete
         mark_delete = QtGui.QAction("Delete", self, enabled=False)
+        mark_delete_group = QtGui.QAction("Delete Group", self, enabled=False)
         mark_ignore = QtGui.QAction("Ignore", self, enabled=False)
         mark_ignore_group = QtGui.QAction("Ignore Group", self, enabled=False)
         mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
@@ -166,6 +167,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(mark_delete)
+        edit_menu.addAction(mark_delete_group)
+        edit_menu.addSeparator()
         edit_menu.addAction(mark_ignore)
         edit_menu.addAction(mark_ignore_group)
         edit_menu.addAction(mark_ignore_folder)
