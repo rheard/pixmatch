@@ -15,12 +15,14 @@ from multiprocessing import Manager, Pool
 from pathlib import Path
 from threading import Event
 from typing import ClassVar, Union
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 import imagehash
 import numpy as np
 
-from PIL import Image
+from PIL import Image, ImageFile, UnidentifiedImageError
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow damaged images
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +183,7 @@ def thread_error_handler(func):
 @thread_error_handler
 def _process_image(
         path: str | Path,
+        supported_extensions: set = None,
         strength: int = 5,
         *,
         exact_match: bool = False,
@@ -191,12 +194,28 @@ def _process_image(
         return path, calculate_hashes(path, is_gif=path.suffix.lower() in {".gif", ".webp"},
                                       strength=strength, exact_match=exact_match)
 
+    if not supported_extensions:
+        supported_extensions = ImageMatcher.SUPPORTED_EXTS
+
     results = {}
     with ZipFile(path) as zf:
         for f in zf.filelist:
-            with zf.open(f) as zipped_file:
-                results[f.filename] = calculate_hashes(zipped_file, is_gif=f.filename[-4:].lower() in {".gif", ".webp"},
-                                                       strength=strength, exact_match=exact_match)
+            f_ext = f.filename[-4:].lower()
+            if f_ext not in supported_extensions:
+                continue
+
+            if f_ext == '.zip':
+                logger.warning('Have not implemented nested zip support yet! Input file: %s (%s)', path, f)
+                continue
+
+            try:
+                with zf.open(f) as zipped_file:
+                    results[f.filename] = calculate_hashes(zipped_file, is_gif=f_ext in {".gif", ".webp"},
+                                                           strength=strength, exact_match=exact_match)
+            except BadZipFile as e:
+                logger.warning("Could not read %s in %s due to %s", f.filename, path, str(e))
+            except UnidentifiedImageError:
+                logger.warning("Could not identify image %s in %s", f.filename, path)
 
     return path, results
 
@@ -481,7 +500,7 @@ class ImageMatcher:
     def _process_image_error_callback(self, e):
         """Temporary for testing"""
         self.processed_images += 1
-        logger.error("Error: %s (input path %s)", e, e.input_path)
+        logger.error("%s: %s (input path %s)", type(e), e, e.input_path)
 
     def _root_stream(self):
         """This is to yield any paths for processing, then wait until processing is finished for any new paths"""
@@ -548,6 +567,7 @@ class ImageMatcher:
                             args=(f, ),
                             kwds={
                                 'strength': self.strength,
+                                'supported_extensions': self.extensions,
                                 'exact_match': self.exact_match,
                             },
                             callback=self._process_image_callback,
