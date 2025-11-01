@@ -10,6 +10,7 @@ import time
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import wraps
 from multiprocessing import Manager, Pool
 from pathlib import Path
 from threading import Event
@@ -163,6 +164,21 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple
         }
 
 
+def thread_error_handler(func):
+    """An error handler for the thread to return information about where the error occurred"""
+
+    @wraps(func)
+    def wrapper(path, *args, **kwargs):
+        try:
+            return func(path, *args, **kwargs)
+        except Exception as e:
+            e.input_path = path
+            raise e
+
+    return wrapper
+
+
+@thread_error_handler
 def _process_image(
         path: str | Path,
         strength: int = 5,
@@ -430,6 +446,9 @@ class ImageMatcher:
             return
 
         self.processed_images += 1
+
+        # From testing at ~1.5m loaded images: it is ~10% faster to return a set and do this than it is to
+        #   iterate over a list and do an `is in` check for each hash
         found_hashes = self._hashes.keys() & extra_hashes
         if not found_hashes:
             # This is a new image not matching any previous, so just add it to the hashmap and move on...
@@ -462,7 +481,7 @@ class ImageMatcher:
     def _process_image_error_callback(self, e):
         """Temporary for testing"""
         self.processed_images += 1
-        logger.error(str(e))
+        logger.error("Error: %s (input path %s)", e, e.input_path)
 
     def _root_stream(self):
         """This is to yield any paths for processing, then wait until processing is finished for any new paths"""
