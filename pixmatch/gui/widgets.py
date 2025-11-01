@@ -381,6 +381,12 @@ class ThumbnailTile(QtWidgets.QFrame):
     stateChanged = QtCore.Signal(ZipPath, SelectionState)
     hovered = QtCore.Signal(ZipPath)
 
+    # These need signals because they need to be handled by higher ups.
+    deleteGroup = QtCore.Signal(ZipPath)
+    ignoreGroup = QtCore.Signal(ZipPath)
+    ignoreFolder = QtCore.Signal(ZipPath)
+    ignoreZip = QtCore.Signal(ZipPath)
+
     def __init__(self, path: ZipPath, pixmap: QtGui.QPixmap | None = None, thumb_size: int = 32, parent=None):
         super().__init__(parent, frameShape=QtWidgets.QFrame.Shape.Box, lineWidth=2)
         self.setObjectName("ThumbnailTile")
@@ -411,8 +417,12 @@ class ThumbnailTile(QtWidgets.QFrame):
         self.context_menu = QtWidgets.QMenu(self)
 
         act_delete = self.context_menu.addAction("Delete")
+        act_delete_group = self.context_menu.addAction("Delete Group")
+        self.context_menu.addSeparator()
         act_ignore = self.context_menu.addAction("Ignore")
         act_ignore_group = self.context_menu.addAction("Ignore group")
+        act_ignore_folder = self.context_menu.addAction("Ignore folder")
+        act_ignore_zip = self.context_menu.addAction("Ignore zip")
         self.context_menu.addSeparator()
         act_rename = self.context_menu.addAction("Rename this file...")
         act_move = self.context_menu.addAction("Move this file")
@@ -422,12 +432,17 @@ class ThumbnailTile(QtWidgets.QFrame):
 
         # Enablement: only these three should work right now
         # If the path is from a zip (locked), disable Delete here as well.
-        act_delete.setEnabled(not bool(self._path.subpath))
-        act_ignore.setEnabled(True)
-        act_unmark.setEnabled(True)
+        act_delete.setEnabled(not self._path.is_zip)
+        act_delete_group.setEnabled(not self._path.is_zip)
+        act_ignore_zip.setEnabled(self._path.is_zip)
+
+        act_delete_group.triggered.connect(self.on_delete_group)
+        act_ignore_group.triggered.connect(self.on_ignore_group)
+        act_ignore_folder.triggered.connect(self.on_ignore_folder)
+        act_ignore_zip.triggered.connect(self.on_ignore_zip)
 
         # Everything else disabled for now
-        act_ignore_group.setEnabled(False)
+        act_ignore_folder.setEnabled(False)
         act_rename.setEnabled(False)
         act_move.setEnabled(False)
         act_symlink.setEnabled(False)
@@ -439,6 +454,22 @@ class ThumbnailTile(QtWidgets.QFrame):
 
         self._apply_state_style()
 
+    def on_delete_group(self):
+        """Delete group button pressed, so emit"""
+        self.deleteGroup.emit(self._path)
+
+    def on_ignore_group(self):
+        """Ignore group button pressed, so emit"""
+        self.ignoreGroup.emit(self._path)
+
+    def on_ignore_folder(self):
+        """Ignore folder button pressed, so emit"""
+        self.ignoreFolder.emit(self._path)
+
+    def on_ignore_zip(self):
+        """Ignore zip button pressed, so emit"""
+        self.ignoreZip.emit(self._path)
+
     @property
     def path(self) -> ZipPath:
         """Get the internal file path"""
@@ -449,9 +480,8 @@ class ThumbnailTile(QtWidgets.QFrame):
         """Get the internal state"""
         return self._state
 
-    @state.setter
-    def state(self, state: SelectionState):
-        """Set the tile selection state without cycling."""
+    def silent_set_state(self, state: SelectionState):
+        """Set the state without invoking the stateChanged event"""
         if self._state is state:
             return
 
@@ -461,6 +491,11 @@ class ThumbnailTile(QtWidgets.QFrame):
 
         self._state = state
         self._apply_state_style()
+
+    @state.setter
+    def state(self, state: SelectionState):
+        """Set the tile selection state without cycling."""
+        self.silent_set_state(state)
         self.stateChanged.emit(self._path, self._state)
 
     def cycle_state(self):
@@ -522,6 +557,11 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     tileStateChanged = QtCore.Signal(ZipPath, SelectionState)
     tileHovered = QtCore.Signal(ZipPath)
 
+    tileDeleteGroup = QtCore.Signal(ZipPath)
+    tileIgnoreGroup = QtCore.Signal(ZipPath)
+    tileIgnoreFolder = QtCore.Signal(ZipPath)
+    tileIgnoreZip = QtCore.Signal(ZipPath)
+
     def __init__(self, images: Sequence[ZipPath], thumb_size: int = 32, parent=None):
         super().__init__(parent)
         self._tiles: list[ThumbnailTile] = []
@@ -552,6 +592,10 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         tile = ThumbnailTile(path=path, pixmap=pm, thumb_size=self._thumb_size)
         tile.stateChanged.connect(self.tileStateChanged)
         tile.hovered.connect(self.tileHovered)
+        tile.deleteGroup.connect(self.tileDeleteGroup)
+        tile.ignoreGroup.connect(self.tileIgnoreGroup)
+        tile.ignoreFolder.connect(self.tileIgnoreFolder)
+        tile.ignoreZip.connect(self.tileIgnoreZip)
         self._tiles.append(tile)
         self.layout.insertWidget(len(self._tiles) - 1, tile)
 
@@ -580,6 +624,11 @@ class DuplicateGroupList(QtWidgets.QWidget):
     groupTileStateChanged = QtCore.Signal(ZipPath, SelectionState)  # path, state
     groupTileHovered = QtCore.Signal(ZipPath)
     pageIndicatorClicked = QtCore.Signal()
+
+    groupTileDeleteGroup = QtCore.Signal(ZipPath)
+    groupTileIgnoreGroup = QtCore.Signal(ZipPath)
+    groupTileIgnoreFolder = QtCore.Signal(ZipPath)
+    groupTileIgnoreZip = QtCore.Signal(ZipPath)
 
     def __init__(self, parent=None, *, max_rows: int = 25, thumb_size: int = 64, **kwargs):
         super().__init__(parent, **kwargs)
@@ -655,6 +704,10 @@ class DuplicateGroupList(QtWidgets.QWidget):
         row = DuplicateGroupRow(group, thumb_size=self._thumb_size)
         row.tileStateChanged.connect(self.groupTileStateChanged)
         row.tileHovered.connect(self.groupTileHovered)
+        row.tileDeleteGroup.connect(self.groupTileDeleteGroup)
+        row.tileIgnoreGroup.connect(self.groupTileIgnoreGroup)
+        row.tileIgnoreFolder.connect(self.groupTileIgnoreFolder)
+        row.tileIgnoreZip.connect(self.groupTileIgnoreZip)
         tail_index = self._vbox.count() - 1
         self._vbox.insertWidget(tail_index, row)
         self._rows.append(row)

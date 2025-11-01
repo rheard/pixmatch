@@ -55,6 +55,11 @@ class ZipPath:
         return (not self.subpath and Path(self.path).suffix.lower() in movie_extensions) \
             or (self.subpath and self.subpath[-4:].lower() in movie_extensions)
 
+    @property
+    def is_zip(self) -> bool:
+        """Does this point to a file located in a zip?"""
+        return bool(self.subpath)
+
     def absolute(self):
         """Get the absolute version of this ZipPath"""
         return ZipPath(str(self.path_obj.absolute()), self.subpath)

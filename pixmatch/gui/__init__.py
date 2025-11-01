@@ -152,27 +152,32 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # region Edit menu
         # TODO: When adding this, make sure not to allow marking a zip file as delete
-        mark_delete = QtGui.QAction("Delete", self, enabled=False)
-        mark_delete_group = QtGui.QAction("Delete Group", self, enabled=False)
-        mark_ignore = QtGui.QAction("Ignore", self, enabled=False)
-        mark_ignore_group = QtGui.QAction("Ignore Group", self, enabled=False)
+        self.mark_delete_menu = QtGui.QAction("Delete", self)
+        self.mark_delete_group_menu = QtGui.QAction("Delete Group", self)
+        mark_ignore = QtGui.QAction("Ignore", self)
+        mark_ignore_group = QtGui.QAction("Ignore Group", self)
         mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
-        mark_ignore_zip = QtGui.QAction("Ignore Zip", self)
+        self.mark_ignore_zip_menu = QtGui.QAction("Ignore Zip", self)
         mark_rename = QtGui.QAction("Rename this file...", self, enabled=False)
         mark_move = QtGui.QAction("Move this file...", self, enabled=False)
         mark_symlink = QtGui.QAction("Symlink this file...", self, enabled=False)
-        unmark = QtGui.QAction("Un-select", self, enabled=False)
+        unmark = QtGui.QAction("Un-select", self)
 
-        mark_ignore_zip.triggered.connect(self.mark_ignore_zip)
+        self.mark_delete_menu.triggered.connect(self.mark_delete)
+        self.mark_delete_group_menu.triggered.connect(self.mark_delete_group)
+        mark_ignore.triggered.connect(self.mark_ignore)
+        mark_ignore_group.triggered.connect(self.mark_ignore_group)
+        self.mark_ignore_zip_menu.triggered.connect(self.mark_ignore_zip)
+        unmark.triggered.connect(self.mark_unmark)
 
         edit_menu = menu.addMenu("&Edit")
-        edit_menu.addAction(mark_delete)
-        edit_menu.addAction(mark_delete_group)
+        edit_menu.addAction(self.mark_delete_menu)
+        edit_menu.addAction(self.mark_delete_group_menu)
         edit_menu.addSeparator()
         edit_menu.addAction(mark_ignore)
         edit_menu.addAction(mark_ignore_group)
         edit_menu.addAction(mark_ignore_folder)
-        edit_menu.addAction(mark_ignore_zip)
+        edit_menu.addAction(self.mark_ignore_zip_menu)
         edit_menu.addSeparator()
         edit_menu.addAction(mark_rename)
         edit_menu.addAction(mark_move)
@@ -436,7 +441,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.duplicate_group_list = DuplicateGroupList(sizePolicy=MAX_SIZE_POLICY)
         self.duplicate_group_list.groupTileStateChanged.connect(self.on_match_state_changed)
-        self.duplicate_group_list.groupTileHovered.connect(self.image_view_area.set_image)
+        self.duplicate_group_list.groupTileHovered.connect(self.on_tile_hover)
+        self.duplicate_group_list.groupTileDeleteGroup.connect(self.mark_delete_group)
+        self.duplicate_group_list.groupTileIgnoreGroup.connect(self.mark_ignore_group)
+        self.duplicate_group_list.groupTileIgnoreZip.connect(self.mark_ignore_zip)
         self.duplicate_group_list.page_down.pressed.connect(self.on_page_down)
         self.duplicate_group_list.page_up.pressed.connect(self.on_page_up)
         self.duplicate_group_list.first_page.pressed.connect(self.on_page_first)
@@ -675,33 +683,62 @@ class MainWindow(QtWidgets.QMainWindow):
             self.current_page = last_page
             self.update_group_list()
 
-    def mark_ignore_zip(self, *_):
+    # region "mark" methods
+    #   These mark the currently open file in the view area to something, typically used by the status bar items
+    def mark_unmark(self, target_path: ZipPath | None = None):
+        """Unmark a file (mark as keep)"""
+        self.change_file_state(target_path or self.image_view_area.current_path, SelectionState.KEEP)
+
+    def mark_delete(self, target_path: ZipPath | None = None):
+        """Unmark a file (mark as keep)"""
+        self.change_file_state(target_path or self.image_view_area.current_path, SelectionState.DELETE)
+
+    def mark_ignore(self, target_path: ZipPath | None = None):
+        """Unmark a file (mark as keep)"""
+        self.change_file_state(target_path or self.image_view_area.current_path, SelectionState.IGNORE)
+
+    def mark_group(self, path, selection: SelectionState):
+        """Mark all files in a group with path as a particular state"""
+        if not path:
+            return
+
+        currently_paused = self.processor.conditional_pause()
+
+        hash_ = self.processor._reverse_hashes[path]
+        for path in self.processor._hashes[hash_].matches:
+            if path.path_obj.suffix.lower() == '.zip' and selection == SelectionState.DELETE:
+                continue
+
+            self.file_states[path] = selection
+
+        self.update_selection_states()
+        self.processor.conditional_resume(currently_paused)
+
+    def mark_ignore_group(self, target_path: ZipPath | None = None):
+        """Mark all files in a group as ignore"""
+        self.mark_group(target_path or self.image_view_area.current_path, SelectionState.IGNORE)
+
+    def mark_delete_group(self, target_path: ZipPath | None = None):
+        """Mark all files in a group as delete"""
+        self.mark_group(target_path or self.image_view_area.current_path, SelectionState.DELETE)
+
+    def mark_ignore_zip(self, target_path: ZipPath | None = None):
         """Mark all files in a zip as ignore"""
         currently_paused = self.processor.conditional_pause()
-        current_zip_path = self.image_view_area.current_path
+        current_zip_path = target_path or self.image_view_area.current_path
 
         if not current_zip_path:
             return
 
         if current_zip_path.path_obj.suffix.lower() != '.zip':
-            return  # TODO: Pop warning dialog
+            return
 
         for path in self.processor._processed_zips[current_zip_path.path]:
-            found = False
+            self.file_states[path] = SelectionState.IGNORE
 
-            for group in self.duplicate_group_list._rows:
-                for tile in group.tiles():
-                    if tile.path == path:
-                        # Set the tile state. This should get forwarded to the on state changed signal
-                        tile.state = SelectionState.IGNORE
-                        found = True
-                        break
-
-            if not found:
-                # This must be on another page
-                self.file_states[path] = SelectionState.IGNORE
-
+        self.update_selection_states()
         self.processor.conditional_resume(currently_paused)
+    # endregion
 
     def update_group_list(self):
         """Update the duplicate group list"""
@@ -713,22 +750,37 @@ class MainWindow(QtWidgets.QMainWindow):
              for m in self.processor.matches[(self.current_page - 1) * row_count:self.current_page * row_count]],
         )
 
-        for group in self.duplicate_group_list._rows:
-            for tile in group.tiles():
-                set_state = self.file_states.get(tile.path)
-                if set_state:
-                    tile.state = set_state
-
+        self.update_selection_states()
         self.duplicate_group_list.update_page_indicator(self.current_page, self.total_pages)
+
+    def change_file_state(self, path: ZipPath, state: SelectionState):
+        """A tile has been clicked and the match state was changed"""
+        if path.path_obj.suffix.lower() == '.zip' and state == SelectionState.DELETE:
+            return
+
+        self.file_states[path] = state
+        self.update_selection_states()
+
+    def on_tile_hover(self, path: ZipPath):
+        """A tile has been hovered over, so handle that logic"""
+        self.image_view_area.set_image(path)
+        self.mark_delete_menu.setEnabled(not path.is_zip)
+        self.mark_delete_group_menu.setEnabled(not path.is_zip)
+        self.mark_ignore_zip_menu.setEnabled(path.is_zip)
 
     def on_match_state_changed(self, path: ZipPath, state):
         """A tile has been clicked and the match state was changed"""
         self.file_states[path] = state
 
+    def update_selection_states(self, selections: dict | None = None):
+        """Update the states of the selection in the duplicate list view"""
+        selections = selections or self.file_states
+
         for group in self.duplicate_group_list._rows:
             for tile in group.tiles():
-                if tile.path == path:
-                    tile.state = state
+                set_state = selections.get(tile.path)
+                if set_state:
+                    tile.silent_set_state(set_state)
 
     # region File Path Selection display
     def build_file_path_selection_display(self):
