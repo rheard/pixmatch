@@ -170,12 +170,12 @@ def thread_error_handler(func):
     """An error handler for the thread to return information about where the error occurred"""
 
     @wraps(func)
-    def wrapper(path, *args, **kwargs):
+    def wrapper(path, *args, **kwargs):  # noqa: ANN202
         try:
             return func(path, *args, **kwargs)
         except Exception as e:
             e.input_path = path
-            raise e
+            raise
 
     return wrapper
 
@@ -183,7 +183,7 @@ def thread_error_handler(func):
 @thread_error_handler
 def _process_image(
         path: str | Path,
-        supported_extensions: set = None,
+        supported_extensions: set | None = None,
         strength: int = 5,
         *,
         exact_match: bool = False,

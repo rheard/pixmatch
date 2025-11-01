@@ -630,7 +630,7 @@ class MainWindow(QtWidgets.QMainWindow):
         val, ok = QtWidgets.QInputDialog.getInt(
             self,
             "Go to page",
-            f"Enter a page number (1–{total}):",
+            f"Enter a page number (1-{total}):",
             value=self.current_page,
             minValue=1,
             maxValue=total,

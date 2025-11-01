@@ -138,7 +138,7 @@ class ImageViewPane(QtWidgets.QWidget):
         self.get_movie.cache_clear()
         self.get_pixmap.cache_clear()
 
-    @lru_cache(maxsize=5)
+    @lru_cache(maxsize=5)  # noqa: B019
     def get_movie(self, path: ZipPath) -> tuple[QtGui.QMovie, int, tuple]:
         """Load a QMovie and details from either a zip or just the file system"""
         file_size = modified = None
@@ -161,7 +161,7 @@ class ImageViewPane(QtWidgets.QWidget):
 
         return movie, file_size, modified
 
-    @lru_cache(maxsize=10)
+    @lru_cache(maxsize=10)  # noqa: B019
     def get_pixmap(self, path: ZipPath) -> tuple[QtGui.QPixmap, int, tuple]:
         """Load a QPixmap and details from either a zip or just the file system"""
         file_size = modified = None
@@ -176,7 +176,7 @@ class ImageViewPane(QtWidgets.QWidget):
                     pixmap = QtGui.QPixmap()
                     pixmap.loadFromData(zf.read(path.subpath))
             except KeyError:
-                return QtGui.QPixmap(), 0, tuple()
+                return QtGui.QPixmap(), 0, ()
         else:
             # Basic image path
             pixmap = QtGui.QPixmap(str(path.path))
@@ -605,6 +605,7 @@ class ClickableLabel(QtWidgets.QLabel):
     clicked = QtCore.Signal()
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        """Override the release event to emit to the clicked signal"""
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.clicked.emit()
             event.accept()
