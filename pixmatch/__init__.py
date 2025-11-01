@@ -530,10 +530,11 @@ class ImageMatcher:
                 if path in self._removed_paths:
                     continue
 
-                for root, _, files in os.walk(path):
+                for root, dirs, files in os.walk(path):
                     if self.is_finished():
                         break
 
+                    dirs.sort()  # This actually works to ensure that os.walk goes in alphabetical order!
                     root = Path(root)
 
                     if any(_is_under(d, root) for d in self._removed_paths):
