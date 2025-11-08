@@ -500,7 +500,7 @@ class ImageMatcher:
     def _process_image_error_callback(self, e):
         """Temporary for testing"""
         self.processed_images += 1
-        logger.error("%s: %s (input path %s)", type(e), e, e.input_path)
+        logger.error("%s: %s (input path %s)", type(e).__name__, e, e.input_path)
 
     def _root_stream(self):
         """This is to yield any paths for processing, then wait until processing is finished for any new paths"""
