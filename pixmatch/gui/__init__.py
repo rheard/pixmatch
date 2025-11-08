@@ -443,7 +443,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duplicate_group_list.groupTileStateChanged.connect(self.on_match_state_changed)
         self.duplicate_group_list.groupTileHovered.connect(self.on_tile_hover)
         self.duplicate_group_list.groupTileDeleteGroup.connect(self.mark_delete_group)
+        self.duplicate_group_list.groupTileDeleteColumn.connect(self.mark_delete_column)
         self.duplicate_group_list.groupTileIgnoreGroup.connect(self.mark_ignore_group)
+        self.duplicate_group_list.groupTileIgnoreColumn.connect(self.mark_ignore_column)
         self.duplicate_group_list.groupTileIgnoreZip.connect(self.mark_ignore_zip)
         self.duplicate_group_list.page_down.pressed.connect(self.on_page_down)
         self.duplicate_group_list.page_up.pressed.connect(self.on_page_up)
@@ -721,6 +723,31 @@ class MainWindow(QtWidgets.QMainWindow):
     def mark_delete_group(self, target_path: ZipPath | None = None):
         """Mark all files in a group as delete"""
         self.mark_group(target_path or self.image_view_area.current_path, SelectionState.DELETE)
+
+    def mark_column(self, column_i: int, selection: SelectionState):
+        """Mark all tiles in a column as a particular state"""
+        currently_paused = self.processor.conditional_pause()
+
+        for row in self.duplicate_group_list._rows:
+            if column_i >= len(row):
+                continue
+
+            target_path = row._tiles[column_i].path
+            self.file_states[target_path] = selection
+
+        self.update_selection_states()
+        self.processor.conditional_resume(currently_paused)
+
+    # TODO: Make target_column option and get the column of the image view area.
+    #    This would allow me to add these options to the menu bar but honestly...
+    #    I'm fine with them just being in the context menu...
+    def mark_ignore_column(self, target_column: int):
+        """Mark all files in a column as ignore"""
+        self.mark_column(target_column, SelectionState.IGNORE)
+
+    def mark_delete_column(self, target_column: int):
+        """Mark all files in a column as delete"""
+        self.mark_column(target_column, SelectionState.DELETE)
 
     def mark_ignore_zip(self, target_path: ZipPath | None = None):
         """Mark all files in a zip as ignore"""

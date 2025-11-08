@@ -1,5 +1,3 @@
-# TODO: In addition to ignore folder, add ignore zip if its a zip file
-
 from datetime import datetime, timezone
 from enum import Enum, auto
 from functools import cache, lru_cache
@@ -383,7 +381,9 @@ class ThumbnailTile(QtWidgets.QFrame):
 
     # These need signals because they need to be handled by higher ups.
     deleteGroup = QtCore.Signal(ZipPath)
+    deleteColumn = QtCore.Signal(ZipPath)
     ignoreGroup = QtCore.Signal(ZipPath)
+    ignoreColumn = QtCore.Signal(ZipPath)
     ignoreFolder = QtCore.Signal(ZipPath)
     ignoreZip = QtCore.Signal(ZipPath)
 
@@ -417,10 +417,12 @@ class ThumbnailTile(QtWidgets.QFrame):
         self.context_menu = QtWidgets.QMenu(self)
 
         act_delete = self.context_menu.addAction("Delete")
-        act_delete_group = self.context_menu.addAction("Delete Group")
+        act_delete_group = self.context_menu.addAction("Delete group")
+        act_delete_column = self.context_menu.addAction("Delete column")
         self.context_menu.addSeparator()
         act_ignore = self.context_menu.addAction("Ignore")
         act_ignore_group = self.context_menu.addAction("Ignore group")
+        act_ignore_column = self.context_menu.addAction("Ignore column")
         act_ignore_folder = self.context_menu.addAction("Ignore folder")
         act_ignore_zip = self.context_menu.addAction("Ignore zip")
         self.context_menu.addSeparator()
@@ -434,10 +436,13 @@ class ThumbnailTile(QtWidgets.QFrame):
         # If the path is from a zip (locked), disable Delete here as well.
         act_delete.setEnabled(not self._path.is_zip)
         act_delete_group.setEnabled(not self._path.is_zip)
+        act_delete_column.setEnabled(not self._path.is_zip)
         act_ignore_zip.setEnabled(self._path.is_zip)
 
         act_delete_group.triggered.connect(self.on_delete_group)
+        act_delete_column.triggered.connect(self.on_delete_column)
         act_ignore_group.triggered.connect(self.on_ignore_group)
+        act_ignore_column.triggered.connect(self.on_ignore_column)
         act_ignore_folder.triggered.connect(self.on_ignore_folder)
         act_ignore_zip.triggered.connect(self.on_ignore_zip)
 
@@ -458,9 +463,17 @@ class ThumbnailTile(QtWidgets.QFrame):
         """Delete group button pressed, so emit"""
         self.deleteGroup.emit(self._path)
 
+    def on_delete_column(self):
+        """Delete column button pressed, so emit"""
+        self.deleteColumn.emit(self._path)
+
     def on_ignore_group(self):
         """Ignore group button pressed, so emit"""
         self.ignoreGroup.emit(self._path)
+
+    def on_ignore_column(self):
+        """Ignore column button pressed, so emit"""
+        self.ignoreColumn.emit(self._path)
 
     def on_ignore_folder(self):
         """Ignore folder button pressed, so emit"""
@@ -558,7 +571,9 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     tileHovered = QtCore.Signal(ZipPath)
 
     tileDeleteGroup = QtCore.Signal(ZipPath)
+    tileDeleteColumn = QtCore.Signal(int)
     tileIgnoreGroup = QtCore.Signal(ZipPath)
+    tileIgnoreColumn = QtCore.Signal(int)
     tileIgnoreFolder = QtCore.Signal(ZipPath)
     tileIgnoreZip = QtCore.Signal(ZipPath)
 
@@ -575,7 +590,11 @@ class DuplicateGroupRow(QtWidgets.QWidget):
 
         self.layout.addStretch(1)
 
-    def tiles(self) -> Iterable[ThumbnailTile]:
+    def __len__(self):
+        """Define len operator for conveince"""
+        return len(self._tiles)
+
+    def tiles(self) -> list[ThumbnailTile]:
         """Fetch all the tiles (in a copy)"""
         return list(self._tiles)
 
@@ -593,11 +612,31 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         tile.stateChanged.connect(self.tileStateChanged)
         tile.hovered.connect(self.tileHovered)
         tile.deleteGroup.connect(self.tileDeleteGroup)
+        tile.deleteColumn.connect(self.on_mark_delete_column)
         tile.ignoreGroup.connect(self.tileIgnoreGroup)
+        tile.ignoreColumn.connect(self.on_mark_ignore_column)
         tile.ignoreFolder.connect(self.tileIgnoreFolder)
         tile.ignoreZip.connect(self.tileIgnoreZip)
         self._tiles.append(tile)
         self.layout.insertWidget(len(self._tiles) - 1, tile)
+
+    def on_mark_delete_column(self, target_path: ZipPath):
+        """Mark delete has been clicked, convert from a path to an integer"""
+        for tile_i, tile in enumerate(self._tiles):
+            if tile.path == target_path:
+                self.tileDeleteColumn.emit(tile_i)
+                return
+
+        raise ValueError("This should never happen!")
+
+    def on_mark_ignore_column(self, target_path: ZipPath):
+        """Mark ignore has been clicked, convert from a path to an integer"""
+        for tile_i, tile in enumerate(self._tiles):
+            if tile.path == target_path:
+                self.tileIgnoreColumn.emit(tile_i)
+                return
+
+        raise ValueError("This should never happen!")
 
 
 class ClickableLabel(QtWidgets.QLabel):
@@ -627,7 +666,9 @@ class DuplicateGroupList(QtWidgets.QWidget):
     pageIndicatorClicked = QtCore.Signal()
 
     groupTileDeleteGroup = QtCore.Signal(ZipPath)
+    groupTileDeleteColumn = QtCore.Signal(int)
     groupTileIgnoreGroup = QtCore.Signal(ZipPath)
+    groupTileIgnoreColumn = QtCore.Signal(int)
     groupTileIgnoreFolder = QtCore.Signal(ZipPath)
     groupTileIgnoreZip = QtCore.Signal(ZipPath)
 
@@ -706,7 +747,9 @@ class DuplicateGroupList(QtWidgets.QWidget):
         row.tileStateChanged.connect(self.groupTileStateChanged)
         row.tileHovered.connect(self.groupTileHovered)
         row.tileDeleteGroup.connect(self.groupTileDeleteGroup)
+        row.tileDeleteColumn.connect(self.groupTileDeleteColumn)
         row.tileIgnoreGroup.connect(self.groupTileIgnoreGroup)
+        row.tileIgnoreColumn.connect(self.groupTileIgnoreColumn)
         row.tileIgnoreFolder.connect(self.groupTileIgnoreFolder)
         row.tileIgnoreZip.connect(self.groupTileIgnoreZip)
         tail_index = self._vbox.count() - 1
