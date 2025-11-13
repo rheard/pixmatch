@@ -426,7 +426,6 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_ignore_folder = self.context_menu.addAction("Ignore folder")
         act_ignore_zip = self.context_menu.addAction("Ignore zip")
         self.context_menu.addSeparator()
-        act_rename = self.context_menu.addAction("Rename this file...")
         act_move = self.context_menu.addAction("Move this file")
         act_symlink = self.context_menu.addAction("Symlink this file")
         self.context_menu.addSeparator()

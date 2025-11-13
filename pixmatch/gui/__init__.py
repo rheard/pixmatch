@@ -158,7 +158,6 @@ class MainWindow(QtWidgets.QMainWindow):
         mark_ignore_group = QtGui.QAction("Ignore Group", self)
         mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
         self.mark_ignore_zip_menu = QtGui.QAction("Ignore Zip", self)
-        mark_rename = QtGui.QAction("Rename this file...", self, enabled=False)
         mark_move = QtGui.QAction("Move this file...", self, enabled=False)
         mark_symlink = QtGui.QAction("Symlink this file...", self, enabled=False)
         unmark = QtGui.QAction("Un-select", self)
@@ -179,7 +178,6 @@ class MainWindow(QtWidgets.QMainWindow):
         edit_menu.addAction(mark_ignore_folder)
         edit_menu.addAction(self.mark_ignore_zip_menu)
         edit_menu.addSeparator()
-        edit_menu.addAction(mark_rename)
         edit_menu.addAction(mark_move)
         edit_menu.addAction(mark_symlink)
         edit_menu.addSeparator()
@@ -201,8 +199,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # TODO: I'm not sure why we would want to slow display?
         #   and show differences has never worked for me
-        # mark_rename = QtGui.QAction("Slow preview display", self)
-        # mark_move = QtGui.QAction("Show differences", self)
+        # QtGui.QAction("Slow preview display", self)
+        # QtGui.QAction("Show differences", self)
 
         view_menu = menu.addMenu("&View")
         view_menu.addAction(page_next)
