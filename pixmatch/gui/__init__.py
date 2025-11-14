@@ -1,6 +1,5 @@
 # TODO: Validate that users don't select overlapping paths...
 # TODO: Maybe add session deleted labels which show how many files and their size deleted this session?
-# TODO: Add a general "process options" button to delete, ignore, move, etc etc
 # TODO: Enable ignore folder before release!
 
 
@@ -241,6 +240,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # endregion
 
         # region Actions menu
+        run_all = QtGui.QAction("Process All Actions", self)
+        run_all.triggered.connect(self.on_all_actions)
         run_move = QtGui.QAction("Move", self)
         run_move.triggered.connect(self.on_move)
         run_delete = QtGui.QAction("Delete", self)
@@ -249,6 +250,7 @@ class MainWindow(QtWidgets.QMainWindow):
         run_ignore.triggered.connect(self.on_ignore)
 
         actions_menu = menu.addMenu("&Actions")
+        actions_menu.addAction(run_all)
         actions_menu.addAction(run_move)
         actions_menu.addAction(run_delete)
         actions_menu.addAction(run_ignore)
@@ -286,6 +288,8 @@ class MainWindow(QtWidgets.QMainWindow):
         tool_box.setLayout(tools)
         tool_box.setMaximumHeight(60)
 
+        process_all_btn = QtWidgets.QPushButton("Process all")
+        process_all_btn.pressed.connect(self.on_all_actions)
         move_btn = QtWidgets.QPushButton("Move")
         move_btn.pressed.connect(self.on_move)
         delete_btn = QtWidgets.QPushButton("Delete")
@@ -294,6 +298,7 @@ class MainWindow(QtWidgets.QMainWindow):
         save_ignored_btn.pressed.connect(self.on_ignore)
 
         actions = QtWidgets.QVBoxLayout()
+        actions.addWidget(process_all_btn)
         actions.addWidget(move_btn)
         actions.addWidget(delete_btn)
         actions.addWidget(save_ignored_btn)
@@ -571,8 +576,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.process_file_states({SelectionState.IGNORE})
 
     def on_move(self, *_):
-        """Ignore button pressed, process ignore file states"""
+        """Move button pressed, process move file states"""
         self.process_file_states({SelectionState.MOVE})
+
+    def on_all_actions(self, *_):
+        """All actions button pressed, process all file states"""
+        self.process_file_states()
 
     @property
     def total_pages(self):
