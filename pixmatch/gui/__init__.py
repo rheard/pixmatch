@@ -983,14 +983,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def process_file_states(self, states: set[SelectionState] | None = None):
         """Process the set file states"""
+        is_paused = self.processor.conditional_pause()
         self.image_view_area.clear()
 
         if not states:
             states = {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE}
 
         states.add(SelectionState.KEEP)
-
-        is_paused = self.processor.conditional_pause()
 
         file_size_deleted = 0
         file_count_deleted = 0
