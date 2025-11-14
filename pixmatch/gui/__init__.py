@@ -166,6 +166,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # TODO: When adding this, make sure not to allow marking a zip file as delete
         self.mark_delete_menu = QtGui.QAction("Delete", self)
         self.mark_delete_group_menu = QtGui.QAction("Delete Group", self)
+        mark_delete_folder = QtGui.QAction("Delete Folder", self, enabled=False)
         mark_ignore = QtGui.QAction("Ignore", self)
         mark_ignore_group = QtGui.QAction("Ignore Group", self)
         mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
@@ -185,6 +186,7 @@ class MainWindow(QtWidgets.QMainWindow):
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(self.mark_delete_menu)
         edit_menu.addAction(self.mark_delete_group_menu)
+        edit_menu.addAction(mark_delete_folder)
         edit_menu.addSeparator()
         edit_menu.addAction(mark_ignore)
         edit_menu.addAction(mark_ignore_group)
