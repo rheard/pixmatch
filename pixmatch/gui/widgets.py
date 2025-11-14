@@ -466,6 +466,7 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_delete.setEnabled(not self._path.is_zip)
         act_delete_group.setEnabled(not self._path.is_zip)
         act_delete_column.setEnabled(not self._path.is_zip)
+        act_delete_folder.setEnabled(not self._path.is_zip)
         act_move.setEnabled(not self._path.is_zip)
         act_ignore_zip.setEnabled(self._path.is_zip)
         act_unmark_zip.setEnabled(self._path.is_zip)
@@ -473,6 +474,7 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_move.triggered.connect(self.on_move)
         act_delete_group.triggered.connect(self.on_delete_group)
         act_delete_column.triggered.connect(self.on_delete_column)
+        act_delete_folder.triggered.connect(self.on_delete_folder)
         act_ignore_group.triggered.connect(self.on_ignore_group)
         act_ignore_column.triggered.connect(self.on_ignore_column)
         act_ignore_folder.triggered.connect(self.on_ignore_folder)
@@ -482,11 +484,7 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_unmark_folder.triggered.connect(self.on_unmark_folder)
         act_unmark_zip.triggered.connect(self.on_unmark_zip)
 
-        # Everything else disabled for now
-        act_delete_folder.setEnabled(False)
-        act_ignore_folder.setEnabled(False)
-        act_unmark_folder.setEnabled(False)
-        act_symlink.setEnabled(False)
+        act_symlink.setEnabled(False)  # TODO:
 
         # Wire up state changes
         act_delete.triggered.connect(lambda _=False: self.change_state_clicked(SelectionValues.DELETE))
@@ -502,6 +500,10 @@ class ThumbnailTile(QtWidgets.QFrame):
     def on_delete_column(self):
         """Delete column button pressed, so emit"""
         self.deleteColumn.emit(self._path)
+
+    def on_delete_folder(self):
+        """Delete folder button pressed, so emit"""
+        self.deleteFolder.emit(self._path)
 
     def on_ignore_group(self):
         """Ignore group button pressed, so emit"""

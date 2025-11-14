@@ -1,5 +1,4 @@
 # TODO: Validate that users don't select overlapping paths...
-# TODO: Enable ignore folder before release!
 
 
 import logging
@@ -165,32 +164,35 @@ class MainWindow(QtWidgets.QMainWindow):
         # TODO: When adding this, make sure not to allow marking a zip file as delete
         self.mark_delete_menu = QtGui.QAction("Delete", self)
         self.mark_delete_group_menu = QtGui.QAction("Delete Group", self)
-        mark_delete_folder = QtGui.QAction("Delete Folder", self, enabled=False)
+        self.mark_delete_folder_menu = QtGui.QAction("Delete Folder", self)
         mark_ignore = QtGui.QAction("Ignore", self)
         mark_ignore_group = QtGui.QAction("Ignore Group", self)
-        mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
+        mark_ignore_folder = QtGui.QAction("Ignore Folder", self)
         self.mark_ignore_zip_menu = QtGui.QAction("Ignore Zip", self)
         self.mark_move_menu = QtGui.QAction("Move this file...", self)
         mark_symlink = QtGui.QAction("Symlink this file...", self, enabled=False)
         unmark = QtGui.QAction("Un-select", self)
         unmark_group = QtGui.QAction("Un-select Group", self)
-        unmark_folder = QtGui.QAction("Un-select Folder", self, enabled=False)
+        unmark_folder = QtGui.QAction("Un-select Folder", self)
         self.unmark_zip_menu = QtGui.QAction("Un-select Zip", self)
 
         self.mark_delete_menu.triggered.connect(self.mark_delete)
         self.mark_delete_group_menu.triggered.connect(self.mark_delete_group)
+        self.mark_delete_folder_menu.triggered.connect(self.mark_delete_folder)
         self.mark_move_menu.triggered.connect(self.mark_move)
         mark_ignore.triggered.connect(self.mark_ignore)
         mark_ignore_group.triggered.connect(self.mark_ignore_group)
+        mark_ignore_folder.triggered.connect(self.mark_ignore_folder)
         self.mark_ignore_zip_menu.triggered.connect(self.mark_ignore_zip)
         unmark.triggered.connect(self.mark_unmark)
         unmark_group.triggered.connect(self.mark_unmark_group)
+        unmark_folder.triggered.connect(self.mark_unmark_folder)
         self.unmark_zip_menu.triggered.connect(self.mark_unmark_zip)
 
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(self.mark_delete_menu)
         edit_menu.addAction(self.mark_delete_group_menu)
-        edit_menu.addAction(mark_delete_folder)
+        edit_menu.addAction(self.mark_delete_folder_menu)
         edit_menu.addSeparator()
         edit_menu.addAction(mark_ignore)
         edit_menu.addAction(mark_ignore_group)
@@ -478,11 +480,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duplicate_group_list.groupTileMove.connect(self.mark_move)
         self.duplicate_group_list.groupTileDeleteGroup.connect(self.mark_delete_group)
         self.duplicate_group_list.groupTileDeleteColumn.connect(self.mark_delete_column)
+        self.duplicate_group_list.groupTileDeleteFolder.connect(self.mark_delete_folder)
         self.duplicate_group_list.groupTileIgnoreGroup.connect(self.mark_ignore_group)
         self.duplicate_group_list.groupTileIgnoreColumn.connect(self.mark_ignore_column)
+        self.duplicate_group_list.groupTileIgnoreFolder.connect(self.mark_ignore_folder)
         self.duplicate_group_list.groupTileIgnoreZip.connect(self.mark_ignore_zip)
         self.duplicate_group_list.groupTileUnmarkGroup.connect(self.mark_unmark_group)
         self.duplicate_group_list.groupTileUnmarkColumn.connect(self.mark_unmark_column)
+        self.duplicate_group_list.groupTileUnmarkFolder.connect(self.mark_unmark_folder)
         self.duplicate_group_list.groupTileUnmarkZip.connect(self.mark_unmark_zip)
         self.duplicate_group_list.page_down.pressed.connect(self.on_page_down)
         self.duplicate_group_list.page_up.pressed.connect(self.on_page_up)
@@ -860,6 +865,38 @@ class MainWindow(QtWidgets.QMainWindow):
         """Mark all files in a zip as ignore"""
         current_zip_path = target_path or self.image_view_area.current_path
         self.mark_zip(current_zip_path, SelectionValues.KEEP)
+
+    def mark_folder(self, path: ZipPath, selection: SelectionValue):
+        """Mark all files in a folder as a particular state"""
+        if not path:
+            return
+
+        path = path.path_obj
+        if not path.is_dir():
+            path = path.parent
+
+        currently_paused = self.processor.conditional_pause()
+
+        for stored_path, hash_ in self.processor._reverse_hashes.items():
+            if stored_path.path_obj.parent != path:
+                continue
+
+            self.file_states[stored_path] = selection
+
+        self.update_selection_states()
+        self.processor.conditional_resume(currently_paused)
+
+    def mark_ignore_folder(self, target_path: ZipPath | None = None):
+        """Mark all files in a folder as ignore"""
+        self.mark_folder(target_path or self.image_view_area.current_path, SelectionValues.IGNORE)
+
+    def mark_delete_folder(self, target_path: ZipPath | None = None):
+        """Mark all files in a folder as delete"""
+        self.mark_folder(target_path or self.image_view_area.current_path, SelectionValues.DELETE)
+
+    def mark_unmark_folder(self, target_path: ZipPath | None = None):
+        """Mark all files in a folder as keep"""
+        self.mark_folder(target_path or self.image_view_area.current_path, SelectionValues.KEEP)
     # endregion
 
     def update_group_list(self):
@@ -894,6 +931,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.image_view_area.set_image(path)
         self.mark_delete_menu.setEnabled(not path.is_zip)
         self.mark_delete_group_menu.setEnabled(not path.is_zip)
+        self.mark_delete_folder_menu.setEnabled(not path.is_zip)
         self.mark_move_menu.setEnabled(not path.is_zip)
         self.mark_ignore_zip_menu.setEnabled(path.is_zip)
 
