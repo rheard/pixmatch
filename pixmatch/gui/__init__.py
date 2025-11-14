@@ -1,6 +1,7 @@
 # TODO: Validate that users don't select overlapping paths...
 # TODO: Maybe add session deleted labels which show how many files and their size deleted this session?
 # TODO: Add a general "process options" button to delete, ignore, move, etc etc
+# TODO: Add keep zip, grup, column, folder
 
 
 import logging
