@@ -36,7 +36,7 @@ class ZipPath:
     # TODO: At some point convert this to Path.
     #   When I tried that last it introduced problems with inter-process communication
     path: str
-    subpath: str
+    subpath: str = ''
 
     @property
     def path_obj(self) -> Path:

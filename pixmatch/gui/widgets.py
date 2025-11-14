@@ -1,8 +1,9 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum, auto
+from enum import Enum
 from functools import cache, lru_cache
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 from zipfile import ZipFile
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -16,16 +17,32 @@ ZIP_ICON_PATH = Path(__file__).resolve().parent / 'zip.png'
 
 class SelectionState(Enum):
     """Per-thumbnail action state."""
-    KEEP = auto()
-    DELETE = auto()
-    IGNORE = auto()
+    KEEP = 'keep'
+    DELETE = 'delete'
+    IGNORE = 'ignore'
+    MOVE = 'move'
 
 
-STATE_ORDER = [SelectionState.KEEP, SelectionState.DELETE, SelectionState.IGNORE]
+@dataclass(frozen=True)
+class SelectionValue:
+    """A selection state with any arguments"""
+    state: SelectionState
+    args: tuple = ()
+
+
+class SelectionValues:
+    """Similar to the SelectionState enum, but for basic SelectionValue instances"""
+    KEEP = SelectionValue(SelectionState.KEEP)
+    DELETE = SelectionValue(SelectionState.DELETE)
+    IGNORE = SelectionValue(SelectionState.IGNORE)
+
+
+STATE_ORDER = [SelectionValues.KEEP, SelectionValues.DELETE, SelectionValues.IGNORE]
 STATE_COLORS = {
     SelectionState.KEEP: QtGui.QColor(80, 200, 120),     # green
     SelectionState.DELETE: QtGui.QColor(230, 80, 80),    # red
     SelectionState.IGNORE: QtGui.QColor(240, 190, 60),   # amber
+    SelectionState.MOVE: QtGui.QColor(130, 200, 255),    # blue
 }
 
 
@@ -366,20 +383,34 @@ def get_overlay_icon(height, width):
     )
 
 
+def _prompt_move_clear(parent, state) -> bool:
+    """Ask the user to confirm clearing a complex state selection."""
+
+    response = QtWidgets.QMessageBox.question(
+        parent,
+        "Clear?",
+        f"Are you sure you want to clear the marking of {state.value}?",
+        QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        QtWidgets.QMessageBox.StandardButton.No,
+    )
+    return response == QtWidgets.QMessageBox.StandardButton.Yes
+
+
 class ThumbnailTile(QtWidgets.QFrame):
     """
     Clickable thumbnail tile that cycles between KEEP → DELETE → IGNORE.
 
     Attributes:
         path: Image path (opaque identifier for the caller).
-        stateChanged(path: str, state: SelectionState): Emitted on state updates.
+        stateChanged(path: str, state: SelectionValue): Emitted on state updates.
         hovered(path: str): Emitted on cursor hovering over thumbnail tile.
     """
     # TODO: Convert state outline to overlay icon
-    stateChanged = QtCore.Signal(ZipPath, SelectionState)
+    stateChanged = QtCore.Signal(ZipPath, SelectionValue)
     hovered = QtCore.Signal(ZipPath)
 
     # These need signals because they need to be handled by higher ups.
+    move = QtCore.Signal(ZipPath)
     deleteGroup = QtCore.Signal(ZipPath)
     deleteColumn = QtCore.Signal(ZipPath)
     ignoreGroup = QtCore.Signal(ZipPath)
@@ -393,7 +424,7 @@ class ThumbnailTile(QtWidgets.QFrame):
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
 
         self._path = path
-        self._state = SelectionState.KEEP
+        self._state = SelectionValues.KEEP
         self._thumb_size = thumb_size
 
         self._image = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -436,8 +467,10 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_delete.setEnabled(not self._path.is_zip)
         act_delete_group.setEnabled(not self._path.is_zip)
         act_delete_column.setEnabled(not self._path.is_zip)
+        act_move.setEnabled(not self._path.is_zip)
         act_ignore_zip.setEnabled(self._path.is_zip)
 
+        act_move.triggered.connect(self.on_move)
         act_delete_group.triggered.connect(self.on_delete_group)
         act_delete_column.triggered.connect(self.on_delete_column)
         act_ignore_group.triggered.connect(self.on_ignore_group)
@@ -447,14 +480,12 @@ class ThumbnailTile(QtWidgets.QFrame):
 
         # Everything else disabled for now
         act_ignore_folder.setEnabled(False)
-        act_rename.setEnabled(False)
-        act_move.setEnabled(False)
         act_symlink.setEnabled(False)
 
         # Wire up state changes
-        act_delete.triggered.connect(lambda _=False: setattr(self, "state", SelectionState.DELETE))
-        act_ignore.triggered.connect(lambda _=False: setattr(self, "state", SelectionState.IGNORE))
-        act_unmark.triggered.connect(lambda _=False: setattr(self, "state", SelectionState.KEEP))
+        act_delete.triggered.connect(lambda _=False: self.change_state_clicked(SelectionValues.DELETE))
+        act_ignore.triggered.connect(lambda _=False: self.change_state_clicked(SelectionValues.IGNORE))
+        act_unmark.triggered.connect(lambda _=False: self.change_state_clicked(SelectionValues.KEEP))
 
         self._apply_state_style()
 
@@ -482,41 +513,59 @@ class ThumbnailTile(QtWidgets.QFrame):
         """Ignore zip button pressed, so emit"""
         self.ignoreZip.emit(self._path)
 
+    def on_move(self):
+        """Move button pressed, so emit"""
+        self.move.emit(self._path)
+
     @property
     def path(self) -> ZipPath:
         """Get the internal file path"""
         return self._path
 
     @property
-    def state(self) -> SelectionState:
+    def state(self) -> SelectionValue:
         """Get the internal state"""
         return self._state
 
-    def silent_set_state(self, state: SelectionState):
+    def silent_set_state(self, state: SelectionValue):
         """Set the state without invoking the stateChanged event"""
-        if self._state is state:
+        if self._state == state:
             return
 
         locked = bool(self._path.subpath)
-        if locked and state == SelectionState.DELETE:
-            raise ValueError("Cannot set a locked file to the delete state!")
+        if locked and state.state in [SelectionState.DELETE, SelectionState.MOVE]:
+            raise ValueError(f"Cannot set a locked file to the {state.state.value} state!")
 
         self._state = state
         self._apply_state_style()
 
+    def change_state_clicked(self, state: SelectionValue):
+        """A change state button has been clicked in the context menu"""
+        if self._state not in STATE_ORDER:
+            if _prompt_move_clear(self, self._state.state):
+                self.state = SelectionValues.KEEP
+            return
+
+        self.state = state
+
     @state.setter
-    def state(self, state: SelectionState):
+    def state(self, state: SelectionValue):
         """Set the tile selection state without cycling."""
         self.silent_set_state(state)
         self.stateChanged.emit(self._path, self._state)
 
     def cycle_state(self):
         """Advance KEEP → DELETE → IGNORE → KEEP."""
+        if self._state not in STATE_ORDER:
+            if _prompt_move_clear(self, self._state.state):
+                self.state = SelectionValues.KEEP
+            return
+
         idx = STATE_ORDER.index(self._state)
         locked = bool(self._path.subpath)
         next_state = STATE_ORDER[(idx + 1) % len(STATE_ORDER)]
         # Cannot set zips to delete:
-        if locked and next_state == SelectionState.DELETE:
+        if locked and next_state == SelectionValues.DELETE:
             next_state = STATE_ORDER[(idx + 2) % len(STATE_ORDER)]
         self.state = next_state
 
@@ -535,7 +584,7 @@ class ThumbnailTile(QtWidgets.QFrame):
 
     def _apply_state_style(self):
         """Update frame color"""
-        color = STATE_COLORS[self._state]
+        color = STATE_COLORS[self._state.state]
         self.setStyleSheet(
             f"""
             QFrame#ThumbnailTile {{
@@ -563,12 +612,13 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     A single row of thumbnails representing one duplicate group.
 
     Signals:
-        tileStateChanged(path: ZipPath, state: SelectionState)
+        tileStateChanged(path: ZipPath, state: SelectionValue)
         tileHovered(path: ZipPath)
     """
-    tileStateChanged = QtCore.Signal(ZipPath, SelectionState)
+    tileStateChanged = QtCore.Signal(ZipPath, SelectionValue)
     tileHovered = QtCore.Signal(ZipPath)
 
+    tileMove = QtCore.Signal(ZipPath)
     tileDeleteGroup = QtCore.Signal(ZipPath)
     tileDeleteColumn = QtCore.Signal(int)
     tileIgnoreGroup = QtCore.Signal(ZipPath)
@@ -589,7 +639,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
 
         self.layout.addStretch(1)
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Define len operator for conveince"""
         return len(self._tiles)
 
@@ -610,6 +660,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         tile = ThumbnailTile(path=path, pixmap=pm, thumb_size=self._thumb_size)
         tile.stateChanged.connect(self.tileStateChanged)
         tile.hovered.connect(self.tileHovered)
+        tile.move.connect(self.tileMove)
         tile.deleteGroup.connect(self.tileDeleteGroup)
         tile.deleteColumn.connect(self.on_mark_delete_column)
         tile.ignoreGroup.connect(self.tileIgnoreGroup)
@@ -660,10 +711,11 @@ class DuplicateGroupList(QtWidgets.QWidget):
         - Borders/badges are colored by state.
     """
 
-    groupTileStateChanged = QtCore.Signal(ZipPath, SelectionState)  # path, state
+    groupTileStateChanged = QtCore.Signal(ZipPath, SelectionValue)  # path, state
     groupTileHovered = QtCore.Signal(ZipPath)
     pageIndicatorClicked = QtCore.Signal()
 
+    groupTileMove = QtCore.Signal(ZipPath)
     groupTileDeleteGroup = QtCore.Signal(ZipPath)
     groupTileDeleteColumn = QtCore.Signal(int)
     groupTileIgnoreGroup = QtCore.Signal(ZipPath)
@@ -745,6 +797,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         row = DuplicateGroupRow(group, thumb_size=self._thumb_size)
         row.tileStateChanged.connect(self.groupTileStateChanged)
         row.tileHovered.connect(self.groupTileHovered)
+        row.tileMove.connect(self.groupTileMove)
         row.tileDeleteGroup.connect(self.groupTileDeleteGroup)
         row.tileDeleteColumn.connect(self.groupTileDeleteColumn)
         row.tileIgnoreGroup.connect(self.groupTileIgnoreGroup)
@@ -759,7 +812,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         """Set all tiles to KEEP."""
         for row in self._rows:
             for tile in row.tiles():
-                tile.state = SelectionState.KEEP
+                tile.state = SelectionValues.KEEP
 
     def clear(self):
         """Reset this widget"""

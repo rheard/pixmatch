@@ -5,15 +5,25 @@
 
 
 import logging
+import shutil
 
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from pixmatch import Finished, ImageMatch, ImageMatcher, NewGroup, NewMatch, ZipPath
+from pixmatch import Finished, ImageMatch, ImageMatcher, NewGroup, NewMatch, ZipPath, _is_under
 from pixmatch.gui.utils import MAX_SIZE_POLICY, NO_MARGIN
-from pixmatch.gui.widgets import DirFileSystemModel, DuplicateGroupList, ImageViewPane, SelectionState
+from pixmatch.gui.widgets import (
+    STATE_ORDER,
+    DirFileSystemModel,
+    DuplicateGroupList,
+    ImageViewPane,
+    SelectionState,
+    SelectionValue,
+    SelectionValues,
+    _prompt_move_clear,
+)
 from pixmatch.utils import human_bytes
 
 ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
@@ -159,12 +169,13 @@ class MainWindow(QtWidgets.QMainWindow):
         mark_ignore_group = QtGui.QAction("Ignore Group", self)
         mark_ignore_folder = QtGui.QAction("Ignore Folder", self, enabled=False)
         self.mark_ignore_zip_menu = QtGui.QAction("Ignore Zip", self)
-        mark_move = QtGui.QAction("Move this file...", self, enabled=False)
+        self.mark_move_menu = QtGui.QAction("Move this file...", self)
         mark_symlink = QtGui.QAction("Symlink this file...", self, enabled=False)
         unmark = QtGui.QAction("Un-select", self)
 
         self.mark_delete_menu.triggered.connect(self.mark_delete)
         self.mark_delete_group_menu.triggered.connect(self.mark_delete_group)
+        self.mark_move_menu.triggered.connect(self.mark_move)
         mark_ignore.triggered.connect(self.mark_ignore)
         mark_ignore_group.triggered.connect(self.mark_ignore_group)
         self.mark_ignore_zip_menu.triggered.connect(self.mark_ignore_zip)
@@ -179,7 +190,7 @@ class MainWindow(QtWidgets.QMainWindow):
         edit_menu.addAction(mark_ignore_folder)
         edit_menu.addAction(self.mark_ignore_zip_menu)
         edit_menu.addSeparator()
-        edit_menu.addAction(mark_move)
+        edit_menu.addAction(self.mark_move_menu)
         edit_menu.addAction(mark_symlink)
         edit_menu.addSeparator()
         edit_menu.addAction(unmark)
@@ -220,7 +231,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # endregion
 
         # region Actions menu
-        run_move = QtGui.QAction("Move", self, enabled=False)
+        run_move = QtGui.QAction("Move", self)
+        run_move.triggered.connect(self.on_move)
         run_delete = QtGui.QAction("Delete", self)
         run_delete.triggered.connect(self.on_delete)
         run_ignore = QtGui.QAction("Save ignored pictures", self)
@@ -265,7 +277,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tool_box.setMaximumHeight(60)
 
         move_btn = QtWidgets.QPushButton("Move")
-        move_btn.setEnabled(False)  # TODO:
+        move_btn.pressed.connect(self.on_move)
         delete_btn = QtWidgets.QPushButton("Delete")
         delete_btn.pressed.connect(self.on_delete)
         save_ignored_btn = QtWidgets.QPushButton("Save ignored")
@@ -441,6 +453,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duplicate_group_list = DuplicateGroupList(sizePolicy=MAX_SIZE_POLICY)
         self.duplicate_group_list.groupTileStateChanged.connect(self.on_match_state_changed)
         self.duplicate_group_list.groupTileHovered.connect(self.on_tile_hover)
+        self.duplicate_group_list.groupTileMove.connect(self.mark_move)
         self.duplicate_group_list.groupTileDeleteGroup.connect(self.mark_delete_group)
         self.duplicate_group_list.groupTileDeleteColumn.connect(self.mark_delete_column)
         self.duplicate_group_list.groupTileIgnoreGroup.connect(self.mark_ignore_group)
@@ -522,10 +535,7 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.processor.running():
             raise RuntimeError("Somehow we're trying to run when the processor appears to be running already!")
 
-        target_paths = [
-            self.selected_file_path_display.item(i).text()
-            for i in range(self.selected_file_path_display.count())
-        ]
+        target_paths = self.file_paths_selected()
 
         self._thread = ProcessorThread(self.processor, target_paths)
         self._thread.signals.new_group.connect(self.on_new_match_group_found)
@@ -546,6 +556,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_ignore(self, *_):
         """Ignore button pressed, process ignore file states"""
         self.process_file_states({SelectionState.IGNORE})
+
+    def on_move(self, *_):
+        """Ignore button pressed, process ignore file states"""
+        self.process_file_states({SelectionState.MOVE})
 
     @property
     def total_pages(self):
@@ -688,17 +702,46 @@ class MainWindow(QtWidgets.QMainWindow):
     #   These mark the currently open file in the view area to something, typically used by the status bar items
     def mark_unmark(self, target_path: ZipPath | None = None):
         """Unmark a file (mark as keep)"""
-        self.change_file_state(target_path or self.image_view_area.current_path, SelectionState.KEEP)
+        self.change_file_state(target_path or self.image_view_area.current_path, SelectionValues.KEEP)
 
     def mark_delete(self, target_path: ZipPath | None = None):
-        """Unmark a file (mark as keep)"""
-        self.change_file_state(target_path or self.image_view_area.current_path, SelectionState.DELETE)
+        """Mark a file as delete"""
+        self.change_file_state(target_path or self.image_view_area.current_path, SelectionValues.DELETE)
 
     def mark_ignore(self, target_path: ZipPath | None = None):
-        """Unmark a file (mark as keep)"""
-        self.change_file_state(target_path or self.image_view_area.current_path, SelectionState.IGNORE)
+        """Mark a file as ignore"""
+        self.change_file_state(target_path or self.image_view_area.current_path, SelectionValues.IGNORE)
 
-    def mark_group(self, path, selection: SelectionState):
+    def mark_move(self, target_path: ZipPath | None = None):
+        """Prompt for a destination and mark a file to be moved."""
+
+        path = target_path or self.image_view_area.current_path
+
+        if not path or path.is_zip:
+            return
+
+        current_file = path.path_obj
+        if not current_file.exists():
+            return
+
+        destination, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Move file",
+            str(current_file),
+        )
+
+        if not destination:
+            return
+
+        destination_path = Path(destination)
+        if destination_path == current_file:
+            logger.info("Marking file as keep because it is the same file...")
+            self.change_file_state(path, SelectionValues.KEEP)
+            return
+
+        self.change_file_state(path, SelectionValue(SelectionState.MOVE, (destination_path, )))
+
+    def mark_group(self, path, selection: SelectionValue):
         """Mark all files in a group with path as a particular state"""
         if not path:
             return
@@ -707,7 +750,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         hash_ = self.processor._reverse_hashes[path]
         for path in self.processor._hashes[hash_].matches:
-            if path.path_obj.suffix.lower() == '.zip' and selection == SelectionState.DELETE:
+            if path.path_obj.suffix.lower() == '.zip' and selection == SelectionValues.DELETE:
                 continue
 
             self.file_states[path] = selection
@@ -717,13 +760,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def mark_ignore_group(self, target_path: ZipPath | None = None):
         """Mark all files in a group as ignore"""
-        self.mark_group(target_path or self.image_view_area.current_path, SelectionState.IGNORE)
+        self.mark_group(target_path or self.image_view_area.current_path, SelectionValues.IGNORE)
 
     def mark_delete_group(self, target_path: ZipPath | None = None):
         """Mark all files in a group as delete"""
-        self.mark_group(target_path or self.image_view_area.current_path, SelectionState.DELETE)
+        self.mark_group(target_path or self.image_view_area.current_path, SelectionValues.DELETE)
 
-    def mark_column(self, column_i: int, selection: SelectionState):
+    def mark_column(self, column_i: int, selection: SelectionValues):
         """Mark all tiles in a column as a particular state"""
         currently_paused = self.processor.conditional_pause()
 
@@ -742,11 +785,11 @@ class MainWindow(QtWidgets.QMainWindow):
     #    I'm fine with them just being in the context menu...
     def mark_ignore_column(self, target_column: int):
         """Mark all files in a column as ignore"""
-        self.mark_column(target_column, SelectionState.IGNORE)
+        self.mark_column(target_column, SelectionValues.IGNORE)
 
     def mark_delete_column(self, target_column: int):
         """Mark all files in a column as delete"""
-        self.mark_column(target_column, SelectionState.DELETE)
+        self.mark_column(target_column, SelectionValues.DELETE)
 
     def mark_ignore_zip(self, target_path: ZipPath | None = None):
         """Mark all files in a zip as ignore"""
@@ -760,7 +803,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         for path in self.processor._processed_zips[current_zip_path.path]:
-            self.file_states[path] = SelectionState.IGNORE
+            self.file_states[path] = SelectionValues.IGNORE
 
         self.update_selection_states()
         self.processor.conditional_resume(currently_paused)
@@ -779,9 +822,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_selection_states()
         self.duplicate_group_list.update_page_indicator(self.current_page, self.total_pages)
 
-    def change_file_state(self, path: ZipPath, state: SelectionState):
+    def change_file_state(self, path: ZipPath, state: SelectionValue):
         """A tile has been clicked and the match state was changed"""
-        if path.path_obj.suffix.lower() == '.zip' and state == SelectionState.DELETE:
+        if path.path_obj.suffix.lower() == '.zip' and state == SelectionValues.DELETE:
+            return
+
+        current_file_state = self.file_states.get(path, SelectionValues.KEEP)
+        if current_file_state not in STATE_ORDER:
+            if _prompt_move_clear(self, current_file_state.state):
+                self.state = state
             return
 
         self.file_states[path] = state
@@ -792,6 +841,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.image_view_area.set_image(path)
         self.mark_delete_menu.setEnabled(not path.is_zip)
         self.mark_delete_group_menu.setEnabled(not path.is_zip)
+        self.mark_move_menu.setEnabled(not path.is_zip)
         self.mark_ignore_zip_menu.setEnabled(path.is_zip)
 
     def on_match_state_changed(self, path: ZipPath, state):
@@ -902,6 +952,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.processor.remove_path(selected_item.text())
                 self.update_group_list()
                 self.update_labels()
+
+    def file_paths_selected(self):
+        """Get the file paths selected in the selected file path display"""
+        return [
+            self.selected_file_path_display.item(i).text()
+            for i in range(self.selected_file_path_display.count())
+        ]
     # endregion
 
     # region Image View area (bottom-right)
@@ -923,12 +980,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.count_label = QtWidgets.QLabel("No groups loaded")
         sb.addPermanentWidget(self.count_label)
 
-    def process_file_states(self, states=None):
+    def process_file_states(self, states: set[SelectionState] | None = None):
         """Process the set file states"""
         self.image_view_area.clear()
 
         if not states:
-            states = {SelectionState.DELETE, SelectionState.IGNORE}
+            states = {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE}
 
         states.add(SelectionState.KEEP)
 
@@ -937,13 +994,14 @@ class MainWindow(QtWidgets.QMainWindow):
         file_size_deleted = 0
         file_count_deleted = 0
         file_count_ignored = 0
+        file_count_moved = 0
         failed_file_deletes = []
 
         for file, set_state in self.file_states.items():
-            if set_state not in states:
+            if set_state.state not in states:
                 continue
 
-            if set_state == SelectionState.DELETE:
+            if set_state.state == SelectionState.DELETE:
                 logger.info("Deleting %s", file)
                 path = file.path_obj
                 try:
@@ -958,17 +1016,43 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 self.processor.remove(file)
                 file_count_deleted += 1
-            elif set_state == SelectionState.IGNORE:
+            elif set_state.state == SelectionState.IGNORE:
                 self.processor.ignore(file)
                 file_count_ignored += 1
-            elif set_state == SelectionState.KEEP:
+            elif set_state.state == SelectionState.KEEP:
                 pass
+            elif set_state.state == SelectionState.MOVE:
+                destination = Path(set_state.args[0])
+                if destination.is_dir():
+                    destination /= file.path_obj.name
+
+                if destination.is_file():
+                    destination.unlink()
+
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                logger.info("Moving %s to %s", file.path_obj, destination)
+                shutil.move(str(file.path_obj), str(destination))
+
+                if any(_is_under(f, destination) for f in self.file_paths_selected()):
+                    dest = ZipPath(str(destination))
+                    hash_ = self.processor._reverse_hashes.pop(file)
+                    self.processor._reverse_hashes[dest] = hash_
+
+                    self.processor._hashes[hash_].matches.remove(file)
+                    self.processor._hashes[hash_].matches.append(dest)
+                else:
+                    # This file is no longer in a selected folder! So remove it from the matching
+                    self.processor.remove(file)
+                    file_count_ignored += 1
+                file_count_moved += 1
+            else:
+                raise NotImplementedError(f"Unknown state {set_state.state.value}")
 
         # Clear the states which we have processed
         self.file_states = {
             k: v
             for k, v in self.file_states.items()
-            if v not in states or k in failed_file_deletes
+            if v.state not in states or k in failed_file_deletes
         }
 
         # If total pages has decreased passed the current page, then make sure to set the current page
@@ -989,7 +1073,10 @@ class MainWindow(QtWidgets.QMainWindow):
             popup_text += f"Deleted {file_count_deleted} files for a savings of {human_bytes(file_size_deleted)}.\n"
 
         if file_count_ignored:
-            popup_text += f"Removed {file_count_ignored} from matching.\n"
+            popup_text += f"Removed {file_count_ignored} files from matching.\n"
+
+        if file_count_moved:
+            popup_text += f"Moved {file_count_moved} file.\n"
 
         if popup_text:
             dlg = QtWidgets.QMessageBox(self)
