@@ -61,28 +61,21 @@ def _load_pixmap(path: ZipPath, thumb_size: int) -> QtGui.QPixmap:
                      QtCore.Qt.TransformationMode.FastTransformation)
 
 
-# TODO: Both of these methods need to iterate over a QMovie so perhaps merge the work together
-def movie_size(movie: QtGui.QMovie):
-    """Get the max dimensions of a QMovie"""
+def movie_sizes(movie: QtGui.QMovie):
+    """Get the max dimensions of a QMovie, and uncompressed file size"""
+    file_size = 0
     movie.jumpToFrame(0)
     rect = QtCore.QRect()
     for _ in range(movie.frameCount()):
         movie.jumpToNextFrame()
         rect |= movie.frameRect()
+
+        img = movie.currentImage()
+        file_size += img.sizeInBytes()
     width = rect.x() + rect.width()
     height = rect.y() + rect.height()
 
-    return QtCore.QSize(width, height)
-
-
-def movie_uncompressed_filesize(movie: QtGui.QMovie):
-    """Get the uncompressed size of a QMovie"""
-    file_size = 0
-    for _ in range(movie.frameCount()):
-        movie.jumpToNextFrame()
-        img = movie.currentImage()
-        file_size += img.sizeInBytes()
-    return file_size
+    return QtCore.QSize(width, height), file_size
 
 
 class ImageViewPane(QtWidgets.QWidget):
@@ -209,14 +202,12 @@ class ImageViewPane(QtWidgets.QWidget):
         self.clear()
         if path.is_gif:
             movie, file_size, modified = self.get_movie(path)
-            object_size = movie_size(movie)
+            object_size, uncompressed_size = movie_sizes(movie)
 
             if self.stack.currentIndex() == 0:
                 self.scaled.setMovie(movie)
             else:
                 self.raw_label.setMovie(movie)
-
-            uncompressed_size = movie_uncompressed_filesize(movie)
 
             # WEBP files which aren't animated will appear as movies with a single frame
             #   Thats boring. For the purposes of the statusbar, just treat them as images
@@ -320,9 +311,7 @@ class ScaledLabel(QtWidgets.QLabel):
             self.updateGeometry()
             return
 
-        cf = movie.currentFrameNumber()
-        movie.jumpToFrame(0)
-        self._movieSize = movie_size(movie)
+        self._movieSize, _ = movie_sizes(movie)
         width = self._movieSize.width()
         height = self._movieSize.height()
 
@@ -334,7 +323,7 @@ class ScaledLabel(QtWidgets.QLabel):
         if minimum == width:
             self._minSize.transpose()
 
-        movie.jumpToFrame(cf)
+        movie.jumpToFrame(0)
         self.updateGeometry()
 
     def paintEvent(self, event):
