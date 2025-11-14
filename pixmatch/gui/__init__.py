@@ -1,5 +1,4 @@
 # TODO: Validate that users don't select overlapping paths...
-# TODO: Maybe add session deleted labels which show how many files and their size deleted this session?
 # TODO: Enable ignore folder before release!
 
 
@@ -111,6 +110,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1200, 800)
 
         # State
+        self.deleted_files_count = 0
+        self.deleted_files_size = 0
         self.current_page: int = 1
         self.processor = None
         self.file_states = {}
@@ -360,6 +361,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_duplicate_images_label(0)
         self._dup_groups_label = QtWidgets.QLabel()
         self.set_duplicate_groups_label(0)
+        self._deleted_files_count_label = QtWidgets.QLabel()
+        self.set_deleted_files_label(0)
+        self._deleted_files_size_label = QtWidgets.QLabel()
+        self.set_deleted_size_label(0)
 
         self._timer_label = QtWidgets.QLabel("00:00:00", alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
         self._elapsed_secs = 0
@@ -376,6 +381,8 @@ class MainWindow(QtWidgets.QMainWindow):
         labels.addWidget(self._loaded_pictures_label)
         labels.addWidget(self._dup_pictures_label)
         labels.addWidget(self._dup_groups_label)
+        labels.addWidget(self._deleted_files_count_label)
+        labels.addWidget(self._deleted_files_size_label)
         labels.addWidget(self._timer_label)
         labels.addWidget(self._progress_bar)
         labels.addLayout(run_controls)
@@ -431,7 +438,7 @@ class MainWindow(QtWidgets.QMainWindow):
         primary_controls = QtWidgets.QVBoxLayout()
         primary_controls.setContentsMargins(NO_MARGIN)
         primary_controls.addLayout(self.build_file_path_selection_display())
-        primary_controls.addWidget(QtWidgets.QWidget(layout=labels_and_such, fixedHeight=200))
+        primary_controls.addWidget(QtWidgets.QWidget(layout=labels_and_such, fixedHeight=240))
 
         general_controls = QtWidgets.QHBoxLayout()
         general_controls.setContentsMargins(NO_MARGIN)
@@ -638,6 +645,14 @@ class MainWindow(QtWidgets.QMainWindow):
         """Set the loaded pictures count label"""
         self._loaded_pictures_label.setText(f"Loaded pictures..{loaded_pictures}")
 
+    def set_deleted_files_label(self, deleted_files: int):
+        """Set the deleted files count label"""
+        self._deleted_files_count_label.setText(f"Deleted files...{deleted_files}")
+
+    def set_deleted_size_label(self, deleted_size: int):
+        """Set the deleted file size label"""
+        self._deleted_files_size_label.setText(f"Deleted size..{human_bytes(deleted_size)}")
+
     def update_labels(self):
         """Update all of the boring labels that need to be regularly updated, and the progress bar"""
         if not self.processor:
@@ -654,6 +669,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_loaded_pictures_label(self.processor.processed_images)
         self.set_duplicate_groups_label(len(self.processor.matches))
         self.set_duplicate_images_label(self.processor.duplicate_images)
+        self.set_deleted_files_label(self.deleted_files_count)
+        self.set_deleted_size_label(self.deleted_files_size)
 
     def on_page_jump_request(self):
         """
@@ -1095,6 +1112,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.current_page = self.total_pages
 
         # Update the GUI:
+        self.deleted_files_size += file_size_deleted
+        self.deleted_files_count += file_count_deleted
         self.update_labels()
         self.update_group_list()
 
