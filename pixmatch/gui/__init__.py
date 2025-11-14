@@ -1,7 +1,6 @@
 # TODO: Validate that users don't select overlapping paths...
 # TODO: Maybe add session deleted labels which show how many files and their size deleted this session?
 # TODO: Add a general "process options" button to delete, ignore, move, etc etc
-# TODO: Add keep zip, grup, column, folder
 # TODO: Enable ignore folder before release!
 
 
@@ -174,6 +173,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mark_move_menu = QtGui.QAction("Move this file...", self)
         mark_symlink = QtGui.QAction("Symlink this file...", self, enabled=False)
         unmark = QtGui.QAction("Un-select", self)
+        unmark_group = QtGui.QAction("Un-select Group", self)
+        unmark_folder = QtGui.QAction("Un-select Folder", self, enabled=False)
+        self.unmark_zip_menu = QtGui.QAction("Un-select Zip", self)
 
         self.mark_delete_menu.triggered.connect(self.mark_delete)
         self.mark_delete_group_menu.triggered.connect(self.mark_delete_group)
@@ -182,6 +184,8 @@ class MainWindow(QtWidgets.QMainWindow):
         mark_ignore_group.triggered.connect(self.mark_ignore_group)
         self.mark_ignore_zip_menu.triggered.connect(self.mark_ignore_zip)
         unmark.triggered.connect(self.mark_unmark)
+        unmark_group.triggered.connect(self.mark_unmark_group)
+        self.unmark_zip_menu.triggered.connect(self.mark_unmark_zip)
 
         edit_menu = menu.addMenu("&Edit")
         edit_menu.addAction(self.mark_delete_menu)
@@ -197,6 +201,9 @@ class MainWindow(QtWidgets.QMainWindow):
         edit_menu.addAction(mark_symlink)
         edit_menu.addSeparator()
         edit_menu.addAction(unmark)
+        edit_menu.addAction(unmark_group)
+        edit_menu.addAction(unmark_folder)
+        edit_menu.addAction(self.unmark_zip_menu)
         # endregion
 
         # region View menu
@@ -462,6 +469,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duplicate_group_list.groupTileIgnoreGroup.connect(self.mark_ignore_group)
         self.duplicate_group_list.groupTileIgnoreColumn.connect(self.mark_ignore_column)
         self.duplicate_group_list.groupTileIgnoreZip.connect(self.mark_ignore_zip)
+        self.duplicate_group_list.groupTileUnmarkGroup.connect(self.mark_unmark_group)
+        self.duplicate_group_list.groupTileUnmarkColumn.connect(self.mark_unmark_column)
+        self.duplicate_group_list.groupTileUnmarkZip.connect(self.mark_unmark_zip)
         self.duplicate_group_list.page_down.pressed.connect(self.on_page_down)
         self.duplicate_group_list.page_up.pressed.connect(self.on_page_up)
         self.duplicate_group_list.first_page.pressed.connect(self.on_page_first)
@@ -769,6 +779,10 @@ class MainWindow(QtWidgets.QMainWindow):
         """Mark all files in a group as delete"""
         self.mark_group(target_path or self.image_view_area.current_path, SelectionValues.DELETE)
 
+    def mark_unmark_group(self, target_path: ZipPath | None = None):
+        """Mark all files in a group as keep"""
+        self.mark_group(target_path or self.image_view_area.current_path, SelectionValues.KEEP)
+
     def mark_column(self, column_i: int, selection: SelectionValues):
         """Mark all tiles in a column as a particular state"""
         currently_paused = self.processor.conditional_pause()
@@ -794,22 +808,32 @@ class MainWindow(QtWidgets.QMainWindow):
         """Mark all files in a column as delete"""
         self.mark_column(target_column, SelectionValues.DELETE)
 
-    def mark_ignore_zip(self, target_path: ZipPath | None = None):
-        """Mark all files in a zip as ignore"""
+    def mark_unmark_column(self, target_column: int):
+        """Mark all files in a column as delete"""
+        self.mark_column(target_column, SelectionValues.KEEP)
+
+    def mark_zip(self, target_path: ZipPath, state: SelectionValue):
+        """Mark all files in a zip"""
+        if not target_path or target_path.path_obj.suffix.lower() != '.zip':
+            return
+
         currently_paused = self.processor.conditional_pause()
-        current_zip_path = target_path or self.image_view_area.current_path
 
-        if not current_zip_path:
-            return
-
-        if current_zip_path.path_obj.suffix.lower() != '.zip':
-            return
-
-        for path in self.processor._processed_zips[current_zip_path.path]:
-            self.file_states[path] = SelectionValues.IGNORE
+        for path in self.processor._processed_zips[target_path.path]:
+            self.file_states[path] = state
 
         self.update_selection_states()
         self.processor.conditional_resume(currently_paused)
+
+    def mark_ignore_zip(self, target_path: ZipPath | None = None):
+        """Mark all files in a zip as ignore"""
+        current_zip_path = target_path or self.image_view_area.current_path
+        self.mark_zip(current_zip_path, SelectionValues.IGNORE)
+
+    def mark_unmark_zip(self, target_path: ZipPath | None = None):
+        """Mark all files in a zip as ignore"""
+        current_zip_path = target_path or self.image_view_area.current_path
+        self.mark_zip(current_zip_path, SelectionValues.KEEP)
     # endregion
 
     def update_group_list(self):

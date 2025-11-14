@@ -407,6 +407,10 @@ class ThumbnailTile(QtWidgets.QFrame):
     ignoreColumn = QtCore.Signal(ZipPath)
     ignoreFolder = QtCore.Signal(ZipPath)
     ignoreZip = QtCore.Signal(ZipPath)
+    unmarkGroup = QtCore.Signal(ZipPath)
+    unmarkColumn = QtCore.Signal(ZipPath)
+    unmarkFolder = QtCore.Signal(ZipPath)
+    unmarkZip = QtCore.Signal(ZipPath)
 
     def __init__(self, path: ZipPath, pixmap: QtGui.QPixmap | None = None, thumb_size: int = 32, parent=None):
         super().__init__(parent, frameShape=QtWidgets.QFrame.Shape.Box, lineWidth=2)
@@ -451,7 +455,11 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_move = self.context_menu.addAction("Move this file")
         act_symlink = self.context_menu.addAction("Symlink this file")
         self.context_menu.addSeparator()
-        act_unmark = self.context_menu.addAction("Unmark")
+        act_unmark = self.context_menu.addAction("Un-select")
+        act_unmark_group = self.context_menu.addAction("Un-select group")
+        act_unmark_column = self.context_menu.addAction("Un-select column")
+        act_unmark_folder = self.context_menu.addAction("Un-select folder")
+        act_unmark_zip = self.context_menu.addAction("Un-select zip")
 
         # Enablement: only these three should work right now
         # If the path is from a zip (locked), disable Delete here as well.
@@ -460,6 +468,7 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_delete_column.setEnabled(not self._path.is_zip)
         act_move.setEnabled(not self._path.is_zip)
         act_ignore_zip.setEnabled(self._path.is_zip)
+        act_unmark_zip.setEnabled(self._path.is_zip)
 
         act_move.triggered.connect(self.on_move)
         act_delete_group.triggered.connect(self.on_delete_group)
@@ -468,10 +477,15 @@ class ThumbnailTile(QtWidgets.QFrame):
         act_ignore_column.triggered.connect(self.on_ignore_column)
         act_ignore_folder.triggered.connect(self.on_ignore_folder)
         act_ignore_zip.triggered.connect(self.on_ignore_zip)
+        act_unmark_group.triggered.connect(self.on_unmark_group)
+        act_unmark_column.triggered.connect(self.on_unmark_column)
+        act_unmark_folder.triggered.connect(self.on_unmark_folder)
+        act_unmark_zip.triggered.connect(self.on_unmark_zip)
 
         # Everything else disabled for now
         act_delete_folder.setEnabled(False)
         act_ignore_folder.setEnabled(False)
+        act_unmark_folder.setEnabled(False)
         act_symlink.setEnabled(False)
 
         # Wire up state changes
@@ -504,6 +518,22 @@ class ThumbnailTile(QtWidgets.QFrame):
     def on_ignore_zip(self):
         """Ignore zip button pressed, so emit"""
         self.ignoreZip.emit(self._path)
+
+    def on_unmark_group(self):
+        """Unmark group button pressed, so emit"""
+        self.unmarkGroup.emit(self._path)
+
+    def on_unmark_column(self):
+        """Unmark column button pressed, so emit"""
+        self.unmarkColumn.emit(self._path)
+
+    def on_unmark_folder(self):
+        """Unmark folder button pressed, so emit"""
+        self.unmarkFolder.emit(self._path)
+
+    def on_unmark_zip(self):
+        """Unmark zip button pressed, so emit"""
+        self.unmarkZip.emit(self._path)
 
     def on_move(self):
         """Move button pressed, so emit"""
@@ -618,6 +648,10 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     tileIgnoreColumn = QtCore.Signal(int)
     tileIgnoreFolder = QtCore.Signal(ZipPath)
     tileIgnoreZip = QtCore.Signal(ZipPath)
+    tileUnmarkGroup = QtCore.Signal(ZipPath)
+    tileUnmarkColumn = QtCore.Signal(int)
+    tileUnmarkFolder = QtCore.Signal(ZipPath)
+    tileUnmarkZip = QtCore.Signal(ZipPath)
 
     def __init__(self, images: Sequence[ZipPath], thumb_size: int = 32, parent=None):
         super().__init__(parent)
@@ -661,6 +695,10 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         tile.ignoreColumn.connect(self.on_mark_ignore_column)
         tile.ignoreFolder.connect(self.tileIgnoreFolder)
         tile.ignoreZip.connect(self.tileIgnoreZip)
+        tile.unmarkGroup.connect(self.tileUnmarkGroup)
+        tile.unmarkColumn.connect(self.on_unmark_column)
+        tile.unmarkFolder.connect(self.tileUnmarkFolder)
+        tile.unmarkZip.connect(self.tileUnmarkZip)
         self._tiles.append(tile)
         self.layout.insertWidget(len(self._tiles) - 1, tile)
 
@@ -678,6 +716,15 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         for tile_i, tile in enumerate(self._tiles):
             if tile.path == target_path:
                 self.tileIgnoreColumn.emit(tile_i)
+                return
+
+        raise ValueError("This should never happen!")
+
+    def on_unmark_column(self, target_path: ZipPath):
+        """Unmark column has been clicked, convert from a path to an integer"""
+        for tile_i, tile in enumerate(self._tiles):
+            if tile.path == target_path:
+                self.tileUnmarkColumn.emit(tile_i)
                 return
 
         raise ValueError("This should never happen!")
@@ -717,6 +764,10 @@ class DuplicateGroupList(QtWidgets.QWidget):
     groupTileIgnoreColumn = QtCore.Signal(int)
     groupTileIgnoreFolder = QtCore.Signal(ZipPath)
     groupTileIgnoreZip = QtCore.Signal(ZipPath)
+    groupTileUnmarkGroup = QtCore.Signal(ZipPath)
+    groupTileUnmarkColumn = QtCore.Signal(int)
+    groupTileUnmarkFolder = QtCore.Signal(ZipPath)
+    groupTileUnmarkZip = QtCore.Signal(ZipPath)
 
     def __init__(self, parent=None, *, max_rows: int = 25, thumb_size: int = 64, **kwargs):
         super().__init__(parent, **kwargs)
@@ -800,6 +851,10 @@ class DuplicateGroupList(QtWidgets.QWidget):
         row.tileIgnoreColumn.connect(self.groupTileIgnoreColumn)
         row.tileIgnoreFolder.connect(self.groupTileIgnoreFolder)
         row.tileIgnoreZip.connect(self.groupTileIgnoreZip)
+        row.tileUnmarkGroup.connect(self.groupTileUnmarkGroup)
+        row.tileUnmarkColumn.connect(self.groupTileUnmarkColumn)
+        row.tileUnmarkFolder.connect(self.groupTileUnmarkFolder)
+        row.tileUnmarkZip.connect(self.groupTileUnmarkZip)
         tail_index = self._vbox.count() - 1
         self._vbox.insertWidget(tail_index, row)
         self._rows.append(row)
