@@ -4,7 +4,7 @@ def human_bytes(
         n: int,
         *,
         base: int = 1000,
-        decimals: int = 0,
+        decimals: int = 1,
         units: Iterable[str] = ("b", "kb", "mb", "gb", "tb", "pb", "eb", "zb", "yb"),
 ) -> str:
     """
