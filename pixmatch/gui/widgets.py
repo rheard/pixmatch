@@ -519,6 +519,12 @@ class ThumbnailTile(QtWidgets.QFrame):
         """Get the internal state"""
         return self._state
 
+    @state.setter
+    def state(self, state: SelectionValue):
+        """Set the tile selection state without cycling."""
+        self.silent_set_state(state)
+        self.stateChanged.emit(self._path, self._state)
+
     def silent_set_state(self, state: SelectionValue):
         """Set the state without invoking the stateChanged event"""
         if self._state == state:
@@ -539,12 +545,6 @@ class ThumbnailTile(QtWidgets.QFrame):
             return
 
         self.state = state
-
-    @state.setter
-    def state(self, state: SelectionValue):
-        """Set the tile selection state without cycling."""
-        self.silent_set_state(state)
-        self.stateChanged.emit(self._path, self._state)
 
     def cycle_state(self):
         """Advance KEEP → DELETE → IGNORE → KEEP."""
@@ -665,7 +665,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         self.layout.insertWidget(len(self._tiles) - 1, tile)
 
     def on_mark_delete_column(self, target_path: ZipPath):
-        """Mark delete has been clicked, convert from a path to an integer"""
+        """Mark delete column has been clicked, convert from a path to an integer"""
         for tile_i, tile in enumerate(self._tiles):
             if tile.path == target_path:
                 self.tileDeleteColumn.emit(tile_i)
@@ -674,7 +674,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         raise ValueError("This should never happen!")
 
     def on_mark_ignore_column(self, target_path: ZipPath):
-        """Mark ignore has been clicked, convert from a path to an integer"""
+        """Mark ignore column has been clicked, convert from a path to an integer"""
         for tile_i, tile in enumerate(self._tiles):
             if tile.path == target_path:
                 self.tileIgnoreColumn.emit(tile_i)
