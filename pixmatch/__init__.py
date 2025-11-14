@@ -57,13 +57,13 @@ class ZipPath:
 
     def absolute(self):
         """Get the absolute version of this ZipPath"""
-        return ZipPath(str(self.path_obj.absolute()), self.subpath)
+        return ZipPath(str(self.path_obj.expanduser().resolve()), self.subpath)
 
 
 def _is_under(folder_abs: str, target: str | Path) -> bool:
     """Return True if the ZipPath's real file (zp.path) is inside folder_abs."""
     try:
-        Path(target).absolute().relative_to(Path(folder_abs).absolute())
+        Path(target).expanduser().resolve().relative_to(Path(folder_abs).expanduser().resolve())
     except ValueError:
         return False
 
@@ -301,7 +301,7 @@ class ImageMatcher:
 
     def add_path(self, path: str | Path):
         """Add a path for processing"""
-        path = str(Path(path).absolute())
+        path = str(Path(path).expanduser().resolve())
         self._removed_paths.discard(path)
         self._new_paths.put(path)
 
@@ -312,7 +312,7 @@ class ImageMatcher:
         """
         # TODO: This works but the biggest problem with it is that it will not remove any images which are still
         #   queue'd up for processing in the ThreadPool... I'm not sure how to fix that yet.
-        folder = str(Path(folder).absolute())
+        folder = str(Path(folder).expanduser().resolve())
         paused = self.conditional_pause()
         self._removed_paths.add(folder)
 
@@ -526,7 +526,7 @@ class ImageMatcher:
                     logger.warning('A path was entered that was not a directory : %s', path)
                     continue
 
-                path = str(path.absolute())
+                path = str(path.expanduser().resolve())
                 if path in self._removed_paths:
                     continue
 
@@ -557,7 +557,7 @@ class ImageMatcher:
                             continue
 
                         if f.suffix.lower() == '.zip':
-                            if str(f.absolute()) in self._processed_zips:
+                            if str(f.expanduser().resolve()) in self._processed_zips:
                                 continue
                         elif ZipPath(str(f), "") in self._reverse_hashes:
                             continue
