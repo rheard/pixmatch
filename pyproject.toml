@@ -5,7 +5,7 @@ requires = [
 
 [project]
 name = "pixmatch"
-version = "0.1.0"
+version = "0.1.1"
 #dynamic = ["license"]
 authors = [
   { name="Ryan Heard", email="ryanwheard@gmail.com" },
@@ -32,7 +32,7 @@ dependencies = [
 "pixmatch.gui" = ["*.ico", "*.png"]
 
 [tool.setuptools.packages.find]
-include = ["pixmatch"]
+include = ["pixmatch*"]
 
 [project.optional-dependencies]
 gui = ["PySide6"]
