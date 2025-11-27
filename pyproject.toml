@@ -5,7 +5,7 @@ requires = [
 
 [project]
 name = "pixmatch"
-version = "0.1.1"
+version = "0.1.2"
 #dynamic = ["license"]
 authors = [
   { name="Ryan Heard", email="ryanwheard@gmail.com" },
@@ -26,6 +26,7 @@ keywords = [""]
 dependencies = [
     "Pillow",
     "imagehash",
+    "Send2Trash",
 ]
 
 [tool.setuptools.package-data]
