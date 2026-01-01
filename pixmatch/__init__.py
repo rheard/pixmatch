@@ -81,21 +81,23 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
     strength = max(0, min(10, strength))
     if strength >= 10:
         return 16, 4
+    if strength >= 9:
+        return 12, 4
     if strength >= 8:
-        return 15, 4
+        return 12, 3
     if strength >= 7:
-        return 13, 4
+        return 10, 3
     if strength >= 6:
-        return 11, 4
+        return 9, 3
     if strength >= 5:
-        return 9, 4
-    if strength >= 4:
-        return 8, 4
-    if strength >= 3:
         return 8, 3
-    if strength >= 2:
+    if strength >= 4:
         return 7, 3
-    return 6, 3
+    if strength >= 3:
+        return 6, 3
+    if strength >= 2:
+        return 5, 3
+    return 5, 2
 
 
 def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple[str, set[str]]:
