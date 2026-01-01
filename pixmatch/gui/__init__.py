@@ -8,6 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from send2trash import send2trash
 
 from pixmatch import Finished, ImageMatch, ImageMatcher, NewGroup, NewMatch, ZipPath, _is_under
 from pixmatch.gui.utils import MAX_SIZE_POLICY, NO_MARGIN
@@ -115,6 +116,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.processor = None
         self.file_states = {}
         self._threadpool = QtCore.QThreadPool()
+
+        self.recycle = True
 
         # UI build
         self.build_menubar()
@@ -260,19 +263,25 @@ class MainWindow(QtWidgets.QMainWindow):
         # endregion
 
         # region Options menu
-        option_hidden_folders = QtGui.QAction("Show hidden folders", self, checkable=True, enabled=False)
+        option_hidden_folders = QtGui.QAction("Show hidden folders", self, checkable=True)
         option_subfolders = QtGui.QAction("Include subfolders", self, checkable=True, checked=True, enabled=False)
         option_rotations = QtGui.QAction("Scan for rotations", self, checkable=True, checked=True, enabled=False)
+        option_recycle = QtGui.QAction("Use recycle bin", self, checkable=True, checked=True)
 
         # TODO: I'm not sure what these two do... I'm willing to add them if someone needs them but I don't.
         # ... = QtGui.QAction("Between folders only", self)
         # ... = QtGui.QAction("Loosen filter automatically", self)
+
+        option_hidden_folders.triggered.connect(self.change_hidden_folders_state)
+        option_recycle.triggered.connect(self.change_recycle_state)
 
         options_menu = menu.addMenu("&Options")
         options_menu.addAction(option_hidden_folders)
         options_menu.addAction(option_subfolders)
         options_menu.addSeparator()
         options_menu.addAction(option_rotations)
+        options_menu.addSeparator()
+        options_menu.addAction(option_recycle)
         # endregion
 
     def build_central(self) -> None:
@@ -448,15 +457,13 @@ class MainWindow(QtWidgets.QMainWindow):
         general_controls.addWidget(QtWidgets.QWidget(layout=general_controls_btns, maximumWidth=130))
 
         # region File system explorer
-        file_system_model = DirFileSystemModel()
-        file_system_model.setFilter(QtCore.QDir.Filter.Dirs
-                                    | QtCore.QDir.Filter.Drives
-                                    | QtCore.QDir.Filter.NoDotAndDotDot)
-        file_system_model.setRootPath("")
+        self.file_system_model = DirFileSystemModel()
+        self.change_hidden_folders_state(False)
+        self.file_system_model.setRootPath("")
         self.file_system_view = QtWidgets.QTreeView(headerHidden=True)
         self.file_system_view.setContentsMargins(NO_MARGIN)
-        self.file_system_view.setModel(file_system_model)
-        self.file_system_view.setRootIndex(file_system_model.index(""))
+        self.file_system_view.setModel(self.file_system_model)
+        self.file_system_view.setRootIndex(self.file_system_model.index(""))
         self.file_system_view.hideColumn(1)  # Size
         self.file_system_view.hideColumn(2)  # Type
         self.file_system_view.hideColumn(3)  # Date Modified
@@ -633,6 +640,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.duplicate_group_list._rows[row_this_is].add_tile(new_match)
 
         self.set_duplicate_images_label(self.processor.duplicate_images)
+
+    def change_hidden_folders_state(self, checked: bool):
+        """Set the file_system_model filter based on if we should show hidden folders"""
+        state = (QtCore.QDir.Filter.Dirs
+                 | QtCore.QDir.Filter.Drives
+                 | QtCore.QDir.Filter.NoDotAndDotDot)
+
+        if checked:
+            state |= QtCore.QDir.Filter.Hidden
+
+        self.file_system_model.setFilter(state)
+
+    def change_recycle_state(self, checked: bool):
+        """Change the 'Use recycle bin' state"""
+        self.recycle = checked
 
     def set_duplicate_groups_label(self, duplicate_groups: int):
         """Set the duplicate groups count label"""
@@ -1092,11 +1114,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 continue
 
             if set_state.state == SelectionState.DELETE:
-                logger.info("Deleting %s", file)
                 path = file.path_obj
                 try:
                     file_size_deleted += path.stat().st_size
-                    path.unlink()
+
+                    if self.recycle:
+                        logger.info("Moving to recycle: %s", file)
+                        send2trash(path)
+                    else:
+                        logger.info("Deleting %s", file)
+                        path.unlink()
                 except PermissionError:
                     logger.info("Failed to delete %s, it is in use!", file)
                     failed_file_deletes.append(file)
