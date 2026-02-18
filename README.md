@@ -6,7 +6,7 @@ PixMatch is a modern, cross-platform duplicate-image finder inspired by VisiPics
     
 PixMatch scans folders (and ZIP archives) for visually similar images, groups matches, 
     and lets you quickly keep, ignore, or delete files from a clean GUI. 
-    Rotated, mirrored or recompressed imgaes are no match for PixMatch!
+    Rotated, mirrored or recompressed images are no match for PixMatch!
     PixMatch can even detect visually similar GIFs and animated WebP files.
     Files inside ZIPs are treated as read-only “sources of truth”
     —never deleted—so you can safely compare against archived libraries.
