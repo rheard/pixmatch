@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import wraps
 from multiprocessing import Manager, Pool
+from os import cpu_count
 from pathlib import Path
 from threading import Event
 from typing import ClassVar, Union
@@ -100,6 +101,51 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
     return 5, 2
 
 
+def is_bad_gif_hash(hash_arr) -> bool:
+    """
+    Returns True if this hash looks like a 'bad first frame' GIF hash:
+      1) all 1s or all 0s
+      2) ONLY "grid points" may be True:
+           - the four corners
+           - edge-centers (only if that dimension is odd)
+           - the center (only if both dimensions are odd)
+         Everything else must be False.
+    """
+    h = np.asarray(hash_arr, dtype=bool)
+    rows, cols = h.shape
+
+    # return np.all(h == h[0, 0])
+
+    # 1) all ones or all zeros
+    if np.all(h == h[0, 0]):
+        return True
+
+    # 2) "grid points only" pattern
+    allowed = np.zeros((rows, cols), dtype=bool)
+
+    # corners
+    allowed[0, 0] = True
+    allowed[0, cols - 1] = True
+    allowed[rows - 1, 0] = True
+    allowed[rows - 1, cols - 1] = True
+
+    # edge centers (only if odd)
+    mid_c = cols // 2 if (cols % 2 == 1) else None
+    mid_r = rows // 2 if (rows % 2 == 1) else None
+
+    if mid_c is not None:
+        allowed[0, mid_c] = True
+        allowed[rows - 1, mid_c] = True
+    if mid_r is not None:
+        allowed[mid_r, 0] = True
+        allowed[mid_r, cols - 1] = True
+    if mid_r is not None and mid_c is not None:
+        allowed[mid_r, mid_c] = True
+
+    # Bad if nothing outside the allowed set is True (i.e., all Trues are only at allowed points)
+    return not h[~allowed].any()
+
+
 def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple[str, set[str]]:
     """
     Calculate hashes for a given file.
@@ -126,8 +172,8 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple
 
     hash_size, highfreq_factor = phash_params_for_strength(strength)
     with Image.open(f) as im:
+        initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
         if is_gif:
-            initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
             # This is going to be a bit confusing but basically, imagehash produces weird hashes for some gifs
             #   because some gifs have bad first frames consisting of nothing or only a single color...
             # To deal with that I'm looking for these bad hashes here and if its one, we advance to the next frame
@@ -137,24 +183,18 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple
             #   2. The hash is all 0000...
             #   3. The hash is of the form 100000...
             # TODO: This is simply not good enough. I'm still getting bad matches for gifs, tho they are extremely rare
-            val = initial_hash.hash[0][0]
-            while all(all(x == val for x in r) for r in initial_hash.hash) \
-                    or all(all(x == np.False_ or (x_i == 0 and r_i == 0) for x_i, x in enumerate(r))
-                           for r_i, r in enumerate(initial_hash.hash)):
+            while is_bad_gif_hash(initial_hash.hash):
                 try:
                     im.seek(im.tell() + 1)
                 except EOFError:  # noqa: PERF203
                     break
                 else:
                     initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
-                    val = initial_hash.hash[0][0]
 
             # For GIFs we'll look for mirrored versions but thats it
             flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
             extras = (flipped_h_image, )
         else:
-            initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
-
             flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
             flipped_v_image = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
             extras = (im.rotate(90), im.rotate(180), im.rotate(270),
