@@ -443,7 +443,11 @@ class ImageMatcher:
 
     def ignore(self, path):
         """Remove a path from the image matching service"""
-        self.remove(path)
+        try:
+            self.remove(path)
+        except KeyError:
+            logger.info("Failed to remove file %s, probably due to it being deleted already", path)
+            pass
 
         if path.path_obj.suffix.lower() != '.zip':
             self._ignored_files.add(path.path)
