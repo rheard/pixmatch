@@ -8,6 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Iterable
 
+from PIL import ImageFile
 from PySide6 import QtCore, QtGui, QtWidgets
 from send2trash import send2trash
 
@@ -24,6 +25,10 @@ from pixmatch.gui.widgets import (
     _prompt_move_clear,
 )
 from pixmatch.utils import human_bytes
+
+# Allow damaged images. This Pillow setting applies to the whole process, so the app sets it rather than pixmatch
+#   setting it for anything that imports it. ImageMatcher passes it on to the processes that hash images.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
 

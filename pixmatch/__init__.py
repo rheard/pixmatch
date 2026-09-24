@@ -21,8 +21,6 @@ from PIL import Image, ImageFile, UnidentifiedImageError
 
 from pixmatch import phash
 
-ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow damaged images
-
 logger = logging.getLogger(__name__)
 
 
@@ -166,6 +164,16 @@ def calculate_hashes(f, *, exact_match=False, draft=False) -> tuple[int | str, s
     variants = (px, np.fliplr(px)) if animated else tuple(phash.orientations(px))
     initial_hash, *extras = (phash.phash(variant) for variant in variants)
     return initial_hash, set(extras)
+
+
+def _init_worker(load_truncated_images: bool):  # ruff: ignore[boolean-type-hint-positional-argument]
+    """
+    Set up a process of the pool that hashes images.
+
+    Pillow's settings belong to each process, and the pool's processes don't get the settings of the one that made them
+        (on Windows they start from scratch). So a setting like allowing damaged images is passed on here.
+    """
+    ImageFile.LOAD_TRUNCATED_IMAGES = load_truncated_images
 
 
 def thread_error_handler(func):
@@ -344,6 +352,9 @@ class HammingIndex:
 class ImageMatcher:
     """
     An image matching SDK
+
+    Images are hashed in other processes, which use this process's setting for PIL.ImageFile.LOAD_TRUNCATED_IMAGES.
+        So set that to True to hash damaged images too (the app does), rather than skipping them.
 
     Args:
         strength (int): The 0-10 strength to use for matching. Defaults to 5.
@@ -689,7 +700,8 @@ class ImageMatcher:
         for path in paths:
             self.add_path(path)
 
-        with Pool(self.processes) as tp:
+        with Pool(self.processes,
+                  initializer=_init_worker, initargs=(ImageFile.LOAD_TRUNCATED_IMAGES, )) as tp:
             for path in self._root_stream():
                 path = Path(path)
                 if not path.is_dir():
