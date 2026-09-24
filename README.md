@@ -67,5 +67,4 @@ options:
 ## Acknowledgements
 
 * Thanks to anyone who supported this effort, including the teams behind PySide6, Pillow, PyPI, and many other projects.
-* Thanks to Johannes Buchner and the team behind imagehash, which serves as a large backbone in this application and saved me a lot of time.
 * Thanks to Guillaume Fouet (aka Ozone) for VisiPics and the inspiration. Please don't be mad, I just wanted some new features like better gif and zip support.
