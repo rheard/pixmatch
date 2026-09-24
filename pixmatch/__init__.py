@@ -452,6 +452,27 @@ class ImageMatcher:
         if path.path_obj.suffix.lower() != '.zip':
             self._ignored_files.add(path.path)
 
+    def rename(self, old_path: ZipPath, new_path: ZipPath):
+        """Update a loaded path after its file was moved on disk. Will not move a file."""
+        if old_path == new_path:
+            return
+
+        logger.info('Renaming %s to %s in %s', old_path, new_path, self.__class__.__name__)
+        paused = self.conditional_pause()
+        try:
+            if new_path in self._reverse_hashes:
+                # The file that was at new_path has been replaced by this one
+                self.remove(new_path)
+
+            hash_ = self._reverse_hashes.pop(old_path)
+            self._reverse_hashes[new_path] = hash_
+
+            # Replace it in place, so the file keeps its position (column) in its group
+            matches = self._hashes[hash_].matches
+            matches[matches.index(old_path)] = new_path
+        finally:
+            self.conditional_resume(paused)
+
     def refresh_match_indexes(self, start=0):
         """Update the match_i value for all the matches passed a certain point"""
         for match_i, match in enumerate(self.matches[start:], start=start):

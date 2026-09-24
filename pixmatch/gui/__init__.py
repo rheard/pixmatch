@@ -1119,6 +1119,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
         return file_size
 
+    def move_file(self, source: Path, destination: Path) -> Path:
+        """
+        Move a file, replacing any file already at the destination.
+
+        Returns:
+            Path: Where the file was moved to.
+        """
+        if destination.is_dir():
+            destination /= source.name
+
+        if destination.is_file() and not destination.samefile(source):
+            # The user agreed to replace this when choosing the destination, but still respect the recycle bin option
+            self.delete_file(destination)
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Moving %s to %s", source, destination)
+        shutil.move(str(source), str(destination))
+        return destination
+
     def process_file_states(self, states: set[SelectionState] | None = None):
         """Process the set file states"""
         if not self.processor:
@@ -1141,6 +1160,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         try:
             for file, set_state in to_process.items():
+                if file in processed_files:
+                    continue
+
                 if set_state.state == SelectionState.KEEP:
                     processed_files.add(file)
                     continue
@@ -1174,24 +1196,13 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.processor.ignore(file)
                         file_count_ignored += 1
                     else:  # SelectionState.MOVE
-                        destination = Path(set_state.args[0])
-                        if destination.is_dir():
-                            destination /= file.path_obj.name
+                        destination = self.move_file(file.path_obj, Path(set_state.args[0]))
 
-                        if destination.is_file():
-                            destination.unlink()
-
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        logger.info("Moving %s to %s", file.path_obj, destination)
-                        shutil.move(str(file.path_obj), str(destination))
+                        # If this replaced a file that was marked too, that marking doesn't apply to this file
+                        processed_files.add(ZipPath(str(destination)))
 
                         if any(_is_under(f, destination) for f in self.file_paths_selected()):
-                            dest = ZipPath(str(destination))
-                            hash_ = self.processor._reverse_hashes.pop(file)
-                            self.processor._reverse_hashes[dest] = hash_
-
-                            self.processor._hashes[hash_].matches.remove(file)
-                            self.processor._hashes[hash_].matches.append(dest)
+                            self.processor.rename(file, ZipPath(str(destination)))
                         else:
                             # This file is no longer in a selected folder! So remove it from the matching
                             self.processor.remove(file)
