@@ -437,11 +437,19 @@ class ElidedLabel(QtWidgets.QLabel):
     def _show_elided_text(self):
         """Show the text, shortened to fit"""
         self.ensurePolished()  # So the font is the style sheet's (e.g. bold), which is wider
-        metrics = self.fontMetrics()
+        # Measure in fractions of a pixel. Rounded to whole pixels, the suffix could measure narrower than it is,
+        #   leaving the text a little too long and cutting off the end of the suffix
+        metrics = QtGui.QFontMetricsF(self.font())
         width = self.contentsRect().width()
-        text_width = max(0, width - metrics.horizontalAdvance(self._suffix))
-        text = metrics.elidedText(self._text, QtCore.Qt.TextElideMode.ElideMiddle, text_width)
-        super().setText(metrics.elidedText(text + self._suffix, QtCore.Qt.TextElideMode.ElideRight, width))
+        suffix_width = metrics.horizontalAdvance(self._suffix)
+        if suffix_width <= width:
+            text = metrics.elidedText(self._text, QtCore.Qt.TextElideMode.ElideMiddle, width - suffix_width)
+            text += self._suffix
+        else:
+            # Not even the suffix fits
+            text = metrics.elidedText(self._suffix, QtCore.Qt.TextElideMode.ElideRight, width)
+
+        super().setText(text)
 # endregion
 
 
