@@ -7,9 +7,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import wraps
 from itertools import combinations
-from multiprocessing import Manager, Pool
+from multiprocessing import Pool
 from os import cpu_count
 from pathlib import Path
+from queue import Queue
 from threading import Event
 from typing import ClassVar
 from zipfile import BadZipFile, ZipFile
@@ -205,6 +206,18 @@ class ImageMatch:
     match_i: int | None = field(default=None)
     matches: list[ZipPath] = field(default_factory=list)
 
+    def snapshot(self) -> "ImageMatch":
+        """
+        A copy of this group as it is now, for events.
+
+        Events are read later on another thread, and the group keeps changing until then. Without a copy, the GUI
+            would build a new group's row from images whose own NewMatch events are still queued, and show them twice.
+
+        Returns:
+            ImageMatch: The copy, which won't change as images are added to or removed from this group.
+        """
+        return ImageMatch(self.match_i, list(self.matches))
+
 
 # region Events
 @dataclass(frozen=True)
@@ -336,9 +349,10 @@ class ImageMatcher:
         self.duplicate_images = 0
         self.matches = []
 
-        m = Manager()
-        self.events = m.Queue()  # Events to go to higher level users
-        self._new_paths = m.Queue()  # Inbound queue for new paths that are added while processing is running
+        # Both ends of these queues are in this process (the pool runs its callbacks on a thread here, not in the
+        #   workers), so they don't need to be multiprocessing queues
+        self.events = Queue()  # Events to go to higher level users
+        self._new_paths = Queue()  # Inbound queue for new paths that are added while processing is running
         self._removed_paths = set()  # Paths that have been removed from processing after processing has been started
         self._ignored_files = set()  # Files which have been ignored and should be skipped from processing if re-ran
         self._processed_zips = {}  # Zips that have been successfully processed
@@ -596,12 +610,12 @@ class ImageMatcher:
             self._hashes[hash_].match_i = len(self.matches)
             self.matches.append(self._hashes[hash_])
             self.duplicate_images += 2
-            self.events.put(NewGroup(self._hashes[hash_]))
+            self.events.put(NewGroup(self._hashes[hash_].snapshot()))
             logger.debug('New match group found: %s', self._hashes[hash_].matches)
         else:
             # Just another match for an existing group...
             self.duplicate_images += 1
-            self.events.put(NewMatch(self._hashes[hash_], path))
+            self.events.put(NewMatch(self._hashes[hash_].snapshot(), path))
             logger.debug('New match found for group #%s: %s',
                          self._hashes[hash_].match_i,
                          self._hashes[hash_].matches)
