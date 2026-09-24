@@ -93,14 +93,30 @@ STRENGTH_RADIUS = (8, 8, 8, 6, 6, 4, 4, 2, 2, 0, 0)
 #   when matches can differ by at least this many bits, but loses matches at stricter strengths.
 DRAFT_RADIUS = 4
 
+# Formats whose extra frames are an animation. Other formats can have more than one frame too, but their first frame is
+#   the image: like a TIFF's other pages, or the preview that many cameras add to their JPEGs (which open as MPO)
+ANIMATION_FORMATS = {"GIF", "PNG", "WEBP"}
 
-def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tuple[int | str, set[int]]:
+
+def _is_animation(im: Image.Image) -> bool:
+    """Is this image an animation? This goes by what's in the file, not its extension"""
+    if im.format not in ANIMATION_FORMATS:
+        return False
+
+    try:
+        return im.is_animated
+    except Exception:  # ruff: ignore[blind-except]
+        # Counting a damaged file's frames can fail (e.g. Pillow raises IndexError for a GIF that was cut off in its
+        #   second frame's header), but its first frame can still be hashed, like a still image's
+        return False
+
+
+def calculate_hashes(f, *, exact_match=False, draft=False) -> tuple[int | str, set[int]]:
     """
     Calculate hashes for a given file.
 
     Args:
         f (IO or str or Path): Either a file path to process, or a in-memory BytesIO object ready for reading.
-        is_gif (bool): Is this gif data? Needed if passing an in-memory BytesIO object.
         exact_match (bool): Use exact SHA256 hahes?
             If true, strength must be 10.
             If false, perceptual hashes will be used, even with high strength.
@@ -120,13 +136,14 @@ def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tupl
         return hasher.hexdigest(), set()
 
     with Image.open(f) as im:
+        animated = _is_animation(im)
         if draft:
             # JPEGs can be decoded at 1/2 to 1/8 of their size (and straight to grayscale), which is several times
             #   faster than decoding all of a large photo just to shrink it. This does nothing for other formats.
             im.draft("L", (phash.HASH_IMG_SIZE * 4, phash.HASH_IMG_SIZE * 4))
         orientation = im.getexif().get(phash.EXIF_ORIENTATION_TAG, 1)
         px = phash.grayscale_pixels(im, phash.HASH_IMG_SIZE)
-        if is_gif:
+        if animated:
             # Some animations start with a blank frame (nothing, or only a single color). Its hash would be noise
             #   that happens to be shared by other blank frames, so use the first frame that has something in it.
             while phash.is_flat(px):
@@ -145,8 +162,8 @@ def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tupl
         return phash.FLAT_HASH, set()
 
     # All the rotations and mirrors are made from the one small resized array, which is far cheaper than
-    #   transforming the full size image. For GIFs we'll look for mirrored versions but thats it
-    variants = (px, np.fliplr(px)) if is_gif else tuple(phash.orientations(px))
+    #   transforming the full size image. For animations we'll look for mirrored versions but thats it
+    variants = (px, np.fliplr(px)) if animated else tuple(phash.orientations(px))
     initial_hash, *extras = (phash.phash(variant) for variant in variants)
     return initial_hash, set(extras)
 
@@ -176,8 +193,7 @@ def _process_image(
     """Get the hashes for a given path. Is multiprocessing compatible"""
     path = Path(path)
     if path.suffix.lower() != '.zip':
-        return path, calculate_hashes(path, is_gif=path.suffix.lower() in {".gif", ".webp"},
-                                      exact_match=exact_match, draft=draft)
+        return path, calculate_hashes(path, exact_match=exact_match, draft=draft)
 
     if not supported_extensions:
         supported_extensions = ImageMatcher.SUPPORTED_EXTS
@@ -195,8 +211,7 @@ def _process_image(
 
             try:
                 with zf.open(f) as zipped_file:
-                    results[f.filename] = calculate_hashes(zipped_file, is_gif=f_ext in {".gif", ".webp"},
-                                                           exact_match=exact_match, draft=draft)
+                    results[f.filename] = calculate_hashes(zipped_file, exact_match=exact_match, draft=draft)
             except BadZipFile as e:
                 logger.warning("Could not read %s in %s due to %s", f.filename, path, e)
             except UnidentifiedImageError:
