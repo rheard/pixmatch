@@ -7,3 +7,4 @@ dist/
 *.log
 *.pyd
 *.pyproj
+__pycache__/
