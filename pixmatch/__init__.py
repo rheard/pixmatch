@@ -438,6 +438,8 @@ class ImageMatcher:
         """Finish processing"""
         logger.debug('Performing finished')
         self._finished.set()
+        # Wake up anything waiting for a pause to end, so it sees that processing is finished instead of waiting forever
+        self._not_paused.set()
 
     def is_finished(self):
         """Is processing finished"""
@@ -656,7 +658,8 @@ class ImageMatcher:
 
     def _root_stream(self):
         """This is to yield any paths for processing, then wait until processing is finished for any new paths"""
-        while not self._new_paths.empty() or self.left_to_process:
+        # Once finished, images that are still being hashed are dropped rather than counted, so don't wait for them
+        while not self.is_finished() and (not self._new_paths.empty() or self.left_to_process):
             if self._new_paths.empty():
                 time.sleep(0.05)
                 continue

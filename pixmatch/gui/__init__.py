@@ -1269,8 +1269,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 event.ignore()
                 return
 
-            if self.processor.running():
-                self.processor.finish()
+            # Stop the scan (even a paused one), and wait for its thread to stop. Otherwise the thread pool would wait
+            #   for that thread as Python shuts down, and by then the thread can't run to finish, so the app would hang
+            self.processor.finish()
+            self._threadpool.waitForDone()
 
         event.accept()
 
