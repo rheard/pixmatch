@@ -6,6 +6,7 @@ import shutil
 
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Iterable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from send2trash import send2trash
@@ -807,22 +808,43 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.change_file_state(path, SelectionValue(SelectionState.MOVE, (destination_path, )))
 
+    def set_file_state(self, path: ZipPath, state: SelectionValue):
+        """
+        Set the state of a single file. Every state change should go through here.
+
+        Files in zips are read-only, so they are never marked for delete or move:
+            processing them would act on the zip itself, not the file inside it.
+        """
+        if path.is_zip and state.state in {SelectionState.DELETE, SelectionState.MOVE}:
+            return
+
+        self.file_states[path] = state
+
+    def mark_paths(self, paths: Iterable[ZipPath], state: SelectionValue):
+        """
+        Mark several files as a particular state, then update the tiles.
+
+        Processing is paused before `paths` is iterated, so it can be a generator over the processor's data.
+        """
+        if not self.processor:
+            return
+
+        currently_paused = self.processor.conditional_pause()
+        try:
+            for path in paths:
+                self.set_file_state(path, state)
+
+            self.update_selection_states()
+        finally:
+            self.processor.conditional_resume(currently_paused)
+
     def mark_group(self, path, selection: SelectionValue):
         """Mark all files in a group with path as a particular state"""
         if not path:
             return
 
-        currently_paused = self.processor.conditional_pause()
-
         hash_ = self.processor._reverse_hashes[path]
-        for path in self.processor._hashes[hash_].matches:
-            if path.path_obj.suffix.lower() == '.zip' and selection == SelectionValues.DELETE:
-                continue
-
-            self.file_states[path] = selection
-
-        self.update_selection_states()
-        self.processor.conditional_resume(currently_paused)
+        self.mark_paths(self.processor._hashes[hash_].matches, selection)
 
     def mark_ignore_group(self, target_path: ZipPath | None = None):
         """Mark all files in a group as ignore"""
@@ -838,17 +860,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def mark_column(self, column_i: int, selection: SelectionValues):
         """Mark all tiles in a column as a particular state"""
-        currently_paused = self.processor.conditional_pause()
-
-        for row in self.duplicate_group_list._rows:
-            if column_i >= len(row):
-                continue
-
-            target_path = row._tiles[column_i].path
-            self.file_states[target_path] = selection
-
-        self.update_selection_states()
-        self.processor.conditional_resume(currently_paused)
+        self.mark_paths(
+            (row._tiles[column_i].path for row in self.duplicate_group_list._rows if column_i < len(row)),
+            selection,
+        )
 
     # TODO: Make target_column option and get the column of the image view area.
     #    This would allow me to add these options to the menu bar but honestly...
@@ -870,13 +885,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not target_path or target_path.path_obj.suffix.lower() != '.zip':
             return
 
-        currently_paused = self.processor.conditional_pause()
-
-        for path in self.processor._processed_zips[target_path.path]:
-            self.file_states[path] = state
-
-        self.update_selection_states()
-        self.processor.conditional_resume(currently_paused)
+        self.mark_paths(self.processor._processed_zips[target_path.path], state)
 
     def mark_ignore_zip(self, target_path: ZipPath | None = None):
         """Mark all files in a zip as ignore"""
@@ -897,16 +906,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path.is_dir():
             path = path.parent
 
-        currently_paused = self.processor.conditional_pause()
-
-        for stored_path, hash_ in self.processor._reverse_hashes.items():
-            if stored_path.path_obj.parent != path:
-                continue
-
-            self.file_states[stored_path] = selection
-
-        self.update_selection_states()
-        self.processor.conditional_resume(currently_paused)
+        self.mark_paths((p for p in self.processor._reverse_hashes if p.path_obj.parent == path), selection)
 
     def mark_ignore_folder(self, target_path: ZipPath | None = None):
         """Mark all files in a folder as ignore"""
@@ -936,16 +936,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def change_file_state(self, path: ZipPath, state: SelectionValue):
         """A tile has been clicked and the match state was changed"""
-        if path.path_obj.suffix.lower() == '.zip' and state == SelectionValues.DELETE:
-            return
-
         current_file_state = self.file_states.get(path, SelectionValues.KEEP)
         if current_file_state not in STATE_ORDER:
             if _prompt_move_clear(self, current_file_state.state):
                 self.state = state
             return
 
-        self.file_states[path] = state
+        self.set_file_state(path, state)
         self.update_selection_states()
 
     def on_tile_hover(self, path: ZipPath):
@@ -959,7 +956,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_match_state_changed(self, path: ZipPath, state):
         """A tile has been clicked and the match state was changed"""
-        self.file_states[path] = state
+        self.set_file_state(path, state)
 
     def update_selection_states(self, selections: dict | None = None):
         """Update the states of the selection in the duplicate list view"""
