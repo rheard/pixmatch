@@ -81,6 +81,10 @@ HASH_IMG_SIZE = HASH_SIZE * 4  # Images are shrunk to this many pixels square to
 #   Past 8 bits, HammingIndex gets much slower (~16ms per image with a million or more images loaded).
 STRENGTH_RADIUS = (8, 8, 8, 6, 6, 4, 4, 2, 2, 0, 0)
 
+# Decoding JPEGs at a reduced size (see calculate_hashes' draft) can move a hash by up to 2 bits. That is harmless
+#   when matches can differ by at least this many bits, but loses matches at stricter strengths.
+DRAFT_RADIUS = 4
+
 
 # A frame whose pixels vary less than this (on a 0-255 scale, after resizing) is blank, like a GIF's empty first frame.
 #   A blank frame has no detail for the hash to describe, so its hash bits would just be floating point noise.
@@ -154,7 +158,7 @@ def _phash(px: np.ndarray) -> int:
 FLAT_HASH = 1 << (HASH_SIZE * HASH_SIZE - 1)
 
 
-def calculate_hashes(f, *, is_gif=False, exact_match=False) -> tuple[int | str, set[int]]:
+def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tuple[int | str, set[int]]:
     """
     Calculate hashes for a given file.
 
@@ -164,6 +168,7 @@ def calculate_hashes(f, *, is_gif=False, exact_match=False) -> tuple[int | str, 
         exact_match (bool): Use exact SHA256 hahes?
             If true, strength must be 10.
             If false, perceptual hashes will be used, even with high strength.
+        draft (bool): Decode JPEGs at a reduced size? Much faster, but can change the hash by a couple bits.
 
     Returns:
         tuple[int | str, set]: The first element is the primary hash,
@@ -179,6 +184,10 @@ def calculate_hashes(f, *, is_gif=False, exact_match=False) -> tuple[int | str, 
         return hasher.hexdigest(), set()
 
     with Image.open(f) as im:
+        if draft:
+            # JPEGs can be decoded at 1/2 to 1/8 of their size (and straight to grayscale), which is several times
+            #   faster than decoding all of a large photo just to shrink it. This does nothing for other formats.
+            im.draft("L", (HASH_IMG_SIZE * 4, HASH_IMG_SIZE * 4))
         orientation = im.getexif().get(EXIF_ORIENTATION_TAG, 1)
         px = _grayscale_pixels(im, HASH_IMG_SIZE)
         if is_gif:
@@ -226,12 +235,13 @@ def _process_image(
         supported_extensions: set | None = None,
         *,
         exact_match: bool = False,
+        draft: bool = False,
 ) -> tuple[Path, tuple | dict[str, tuple]]:
     """Get the hashes for a given path. Is multiprocessing compatible"""
     path = Path(path)
     if path.suffix.lower() != '.zip':
         return path, calculate_hashes(path, is_gif=path.suffix.lower() in {".gif", ".webp"},
-                                      exact_match=exact_match)
+                                      exact_match=exact_match, draft=draft)
 
     if not supported_extensions:
         supported_extensions = ImageMatcher.SUPPORTED_EXTS
@@ -250,7 +260,7 @@ def _process_image(
             try:
                 with zf.open(f) as zipped_file:
                     results[f.filename] = calculate_hashes(zipped_file, is_gif=f_ext in {".gif", ".webp"},
-                                                           exact_match=exact_match)
+                                                           exact_match=exact_match, draft=draft)
             except BadZipFile as e:
                 logger.warning("Could not read %s in %s due to %s", f.filename, path, str(e))
             except UnidentifiedImageError:
@@ -739,6 +749,7 @@ class ImageMatcher:
                             kwds={
                                 'supported_extensions': self.extensions,
                                 'exact_match': self.exact_match,
+                                'draft': self.radius >= DRAFT_RADIUS,
                             },
                             callback=self._process_image_callback,
                             error_callback=self._process_image_error_callback,
