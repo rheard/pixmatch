@@ -48,8 +48,8 @@ class ZipPath:
     def is_gif(self) -> bool:
         """Is this a path to an animated image?"""
         movie_extensions = {'.gif', '.webp'}
-        return (not self.subpath and Path(self.path).suffix.lower() in movie_extensions) \
-            or (self.subpath and self.subpath[-4:].lower() in movie_extensions)
+        suffix = Path(self.subpath or self.path).suffix.lower()
+        return suffix in movie_extensions
 
     @property
     def is_zip(self) -> bool:
@@ -242,7 +242,7 @@ def _process_image(
     results = {}
     with ZipFile(path) as zf:
         for f in zf.filelist:
-            f_ext = f.filename[-4:].lower()
+            f_ext = Path(f.filename).suffix.lower()
             if f_ext not in supported_extensions:
                 continue
 
