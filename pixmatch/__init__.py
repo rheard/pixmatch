@@ -545,13 +545,11 @@ class ImageMatcher:
 
     def _process_image_callback(self, result):
         """
-        Handle the result of hashing an image.
+        Handle the result of hashing an image, and update the found and processed image counts.
 
-        This needs to do quite a few things including sanitizing the results,
-            actually checking if the hash matches an existing image,
-            adding the image and any matches to the backend data structures, notify any listeners,
-            update the found and processed image counts,
-            and verify that this result wasn't added as a removed path since it was queued.
+        This runs on the pool's thread that hands back results. If it raised, that thread would stop, so no more results
+            would be handled and the scan would never finish. So an image that can't be added is logged,
+            and counted like an image that couldn't be hashed.
 
         Args:
             result: A tuple consisting of the path to the file, and the resultant hashes.
@@ -566,24 +564,46 @@ class ImageMatcher:
         if self.is_finished():
             return
 
+        try:
+            processed = self._add_result(result)
+        except Exception:
+            logger.exception("Could not add %s", result[0])
+            processed = True
+
+        if processed:
+            self.processed_images += 1
+        else:
+            self.found_images -= 1
+
+    def _add_result(self, result) -> bool:
+        """
+        Add the result of hashing an image to the matching.
+
+        This needs to do quite a few things including sanitizing the results,
+            actually checking if the hash matches an existing image,
+            adding the image and any matches to the backend data structures, notify any listeners,
+            and verify that this result wasn't added as a removed path since it was queued.
+
+        Returns:
+            bool: Whether the image was processed. False if it was skipped, so it isn't part of the scan after all,
+                and for a zip, whose images are each handled (and counted) on their own.
+        """
         # region Sanitize results
         path: Path | str | ZipPath
         path, hashes = result
 
         if any(_is_under(d, path.path if isinstance(path, ZipPath) else path) for d in self._removed_paths):
-            # This image was removed AFTER it was queue'd! So decrement the found images count and just leave...
-            self.found_images -= 1
-            return
+            # This image was removed AFTER it was queue'd! So just leave...
+            return False
 
         if isinstance(hashes, dict):
-            self.found_images -= 1
             subpaths = []
             for sub_path, sub_hashes in hashes.items():
                 self.found_images += 1
                 subpaths.append(ZipPath(str(path), sub_path))
                 self._process_image_callback((subpaths[-1], sub_hashes))
             self._processed_zips[str(path)] = subpaths
-            return
+            return False
 
         initial_hash, extra_hashes = hashes
         extra_hashes.add(initial_hash)
@@ -593,10 +613,7 @@ class ImageMatcher:
         # endregion
 
         if path in self._reverse_hashes:
-            self.found_images -= 1
-            return
-
-        self.processed_images += 1
+            return False
 
         hash_ = self._find_group(extra_hashes)
         if hash_ is None:
@@ -607,7 +624,7 @@ class ImageMatcher:
             self._hashes[hash_].matches.append(path)
             if self._index is not None:
                 self._index.add(hash_)
-            return
+            return True
 
         # We have found a match!
         self._reverse_hashes[path] = hash_
@@ -628,10 +645,14 @@ class ImageMatcher:
                          self._hashes[hash_].match_i,
                          self._hashes[hash_].matches)
 
+        return True
+
     def _process_image_error_callback(self, e):
-        """Temporary for testing"""
+        """Log an image that couldn't be hashed, and count it as processed"""
         self.processed_images += 1
-        logger.error("%s: %s (input path %s)", type(e).__name__, e, e.input_path)
+        # Errors from _process_image say which file they were for, but errors from the pool itself (like a result that
+        #   couldn't be sent back) don't. And like _process_image_callback, this must not raise
+        logger.error("%s: %s (input path %s)", type(e).__name__, e, getattr(e, "input_path", "unknown"))
 
     def _root_stream(self):
         """This is to yield any paths for processing, then wait until processing is finished for any new paths"""
