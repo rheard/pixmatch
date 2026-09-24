@@ -24,8 +24,8 @@ classifiers = [
 ]
 keywords = [""]
 dependencies = [
+    "numpy",
     "Pillow",
-    "imagehash",
     "Send2Trash",
 ]
 

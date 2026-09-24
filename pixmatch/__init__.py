@@ -5,7 +5,7 @@ import time
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from functools import wraps
+from functools import lru_cache, wraps
 from multiprocessing import Manager, Pool
 from os import cpu_count
 from pathlib import Path
@@ -13,7 +13,6 @@ from threading import Event
 from typing import ClassVar, Union
 from zipfile import BadZipFile, ZipFile
 
-import imagehash
 import numpy as np
 
 from PIL import Image, ImageFile, UnidentifiedImageError
@@ -73,7 +72,7 @@ def _is_under(folder_abs: str, target: str | Path) -> bool:
 
 def phash_params_for_strength(strength: int) -> tuple[int, int]:
     """
-    Convert a 0-10 strength to settings for imagehash
+    Convert a 0-10 strength to settings for the perceptual hash
 
     Returns:
         tuple<int, int>: The hash size (in bytes) and the high frequency factor
@@ -101,49 +100,77 @@ def phash_params_for_strength(strength: int) -> tuple[int, int]:
     return 5, 2
 
 
-def is_bad_gif_hash(hash_arr) -> bool:
+# A frame whose pixels vary less than this (on a 0-255 scale, after resizing) is blank, like a GIF's empty first frame.
+#   A blank frame has no detail for the hash to describe, so its hash bits would just be floating point noise.
+FLAT_STD = 2.0
+
+EXIF_ORIENTATION_TAG = 0x0112
+
+# The numpy equivalent of the transpose that ImageOps.exif_transpose applies for each EXIF orientation
+_EXIF_ORIENTATIONS = {
+    2: np.fliplr,  # FLIP_LEFT_RIGHT
+    3: lambda px: np.rot90(px, 2),  # ROTATE_180
+    4: np.flipud,  # FLIP_TOP_BOTTOM
+    5: np.transpose,  # TRANSPOSE
+    6: lambda px: np.rot90(px, 3),  # ROTATE_270
+    7: lambda px: np.rot90(px, 2).T,  # TRANSVERSE
+    8: lambda px: np.rot90(px, 1),  # ROTATE_90
+}
+
+
+@lru_cache
+def _dct_basis(img_size: int, hash_size: int) -> np.ndarray:
+    """The lowest frequency rows of an (unnormalized) DCT-II matrix, the same DCT imagehash's phash uses"""
+    n = np.arange(img_size)
+    k = np.arange(hash_size)[:, None]
+    return 2 * np.cos(np.pi * (2 * n + 1) * k / (2 * img_size))
+
+
+def _grayscale_pixels(im: Image.Image, img_size: int) -> np.ndarray:
+    """Convert an image (or the current frame of an animation) to an img_size x img_size grayscale array"""
+    if im.mode in {"RGBA", "RGBa", "LA", "La", "PA"} or "transparency" in im.info:
+        # Converting straight to grayscale throws away alpha and hashes whatever colors hide under transparent pixels.
+        #   So put the image on a white background first, the same as a copy of it that was flattened would be
+        im = im.convert("RGBA")
+        im = Image.alpha_composite(Image.new("RGBA", im.size, "white"), im)
+    elif im.mode.startswith("I;16"):
+        # Pillow clips 16-bit values to 0-255 when converting to grayscale, which turns nearly everything white
+        im = Image.fromarray((np.asarray(im) >> 8).astype(np.uint8))
+
+    return np.asarray(im.convert("L").resize((img_size, img_size), Image.Resampling.LANCZOS), dtype=np.float64)
+
+
+def _is_flat(px: np.ndarray) -> bool:
+    """Is this grayscale array blank (nothing, or only a single color)?"""
+    return px.std() < FLAT_STD
+
+
+def _orientations(px: np.ndarray):
+    """Yield the 8 rotations and mirrors of px, starting with px itself"""
+    for k in range(4):
+        rotated = np.rot90(px, k)
+        yield rotated
+        yield np.fliplr(rotated)
+
+
+def _phash(px: np.ndarray, hash_size: int) -> int:
     """
-    Returns True if this hash looks like a 'bad first frame' GIF hash:
-      1) all 1s or all 0s
-      2) ONLY "grid points" may be True:
-           - the four corners
-           - edge-centers (only if that dimension is odd)
-           - the center (only if both dimensions are odd)
-         Everything else must be False.
+    Perceptual hash of an already resized grayscale array.
+
+    This is the same algorithm (and gives the same bits) as imagehash's phash.
+
+    Returns:
+        int: The hash bits, in row-major order with the first bit being the most significant.
     """
-    h = np.asarray(hash_arr, dtype=bool)
-    rows, cols = h.shape
+    basis = _dct_basis(px.shape[0], hash_size)
+    dct = basis @ px @ basis.T
+    bits = (dct > np.median(dct)).ravel()
+    return int.from_bytes(np.packbits(bits).tobytes(), "big") >> (-bits.size % 8)
 
-    # return np.all(h == h[0, 0])
 
-    # 1) all ones or all zeros
-    if np.all(h == h[0, 0]):
-        return True
-
-    # 2) "grid points only" pattern
-    allowed = np.zeros((rows, cols), dtype=bool)
-
-    # corners
-    allowed[0, 0] = True
-    allowed[0, cols - 1] = True
-    allowed[rows - 1, 0] = True
-    allowed[rows - 1, cols - 1] = True
-
-    # edge centers (only if odd)
-    mid_c = cols // 2 if (cols % 2 == 1) else None
-    mid_r = rows // 2 if (rows % 2 == 1) else None
-
-    if mid_c is not None:
-        allowed[0, mid_c] = True
-        allowed[rows - 1, mid_c] = True
-    if mid_r is not None:
-        allowed[mid_r, 0] = True
-        allowed[mid_r, cols - 1] = True
-    if mid_r is not None and mid_c is not None:
-        allowed[mid_r, mid_c] = True
-
-    # Bad if nothing outside the allowed set is True (i.e., all Trues are only at allowed points)
-    return not h[~allowed].any()
+def _hash_hex(value: int, bits: int) -> str:
+    """Format a hash as hex, matching the str() of an imagehash hash"""
+    return f"{value:0{(bits + 3) // 4}x}"
 
 
 def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple[str, set[str]]:
@@ -171,41 +198,35 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple
         return hasher.hexdigest(), set()
 
     hash_size, highfreq_factor = phash_params_for_strength(strength)
+    img_size = hash_size * highfreq_factor
+    bits = hash_size * hash_size
     with Image.open(f) as im:
-        initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
+        orientation = im.getexif().get(EXIF_ORIENTATION_TAG, 1)
+        px = _grayscale_pixels(im, img_size)
         if is_gif:
-            # This is going to be a bit confusing but basically, imagehash produces weird hashes for some gifs
-            #   because some gifs have bad first frames consisting of nothing or only a single color...
-            # To deal with that I'm looking for these bad hashes here and if its one, we advance to the next frame
-            #   and use THAT for imagehash instead.
-            # The ones we need to be on the lookout for are:
-            #   1. The hash is all 1111...
-            #   2. The hash is all 0000...
-            #   3. The hash is of the form 100000...
-            # TODO: This is simply not good enough. I'm still getting bad matches for gifs, tho they are extremely rare
-            while is_bad_gif_hash(initial_hash.hash):
+            # Some animations start with a blank frame (nothing, or only a single color). Its hash would be noise
+            #   that happens to be shared by other blank frames, so use the first frame that has something in it.
+            while _is_flat(px):
                 try:
                     im.seek(im.tell() + 1)
                 except EOFError:  # noqa: PERF203
                     break
                 else:
-                    initial_hash = imagehash.phash(im, hash_size=hash_size, highfreq_factor=highfreq_factor)
+                    px = _grayscale_pixels(im, img_size)
 
-            # For GIFs we'll look for mirrored versions but thats it
-            flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-            extras = (flipped_h_image, )
-        else:
-            flipped_h_image = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-            flipped_v_image = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-            extras = (im.rotate(90), im.rotate(180), im.rotate(270),
-                      flipped_h_image, flipped_h_image.rotate(90), flipped_h_image.rotate(180),
-                      flipped_h_image.rotate(270),
-                      flipped_v_image, flipped_v_image.rotate(90), flipped_v_image.rotate(180),
-                      flipped_v_image.rotate(270))
+    # Hash the image the way it is displayed, not the way it is stored
+    if orientation in _EXIF_ORIENTATIONS:
+        px = _EXIF_ORIENTATIONS[orientation](px)
 
-        return str(initial_hash), {
-            str(imagehash.phash(image, hash_size=hash_size, highfreq_factor=highfreq_factor)) for image in extras
-        }
+    if _is_flat(px):
+        # Every rotation of a blank image is the same blank image, and its only meaningful bit is the first (DC) one
+        return _hash_hex(1 << (bits - 1), bits), set()
+
+    # All the rotations and mirrors are made from the one small resized array, which is far cheaper than
+    #   transforming the full size image. For GIFs we'll look for mirrored versions but thats it
+    variants = (px, np.fliplr(px)) if is_gif else tuple(_orientations(px))
+    initial_hash, *extras = (_hash_hex(_phash(variant, hash_size), bits) for variant in variants)
+    return initial_hash, set(extras)
 
 
 def thread_error_handler(func):
