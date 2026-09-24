@@ -102,6 +102,7 @@ ignore=[
     "PT013",   # Incorrect import of pytest
     "RUF023",  # __slots__ is not sorted
     "RUF052",  # Local dummy variable X is accessed
+    "RUF067",  # `__init__` module should only contain docstrings and re-exports
     "TRY003",  # Avoid specifying long messages outside the exception class
     "UP035",   # Import from `collections.abc` instead: `Iterable`
 ]
