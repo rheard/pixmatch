@@ -405,6 +405,8 @@ class ElidedLabel(QtWidgets.QLabel):
     """
     A one line label that shortens its text with "…" to fit its width, instead of growing to fit its text.
 
+    When the text is shortened, hovering the label shows the whole text.
+
     A long file path in the image preview's status used to force the preview pane (and the window) wider.
     """
 
@@ -435,7 +437,7 @@ class ElidedLabel(QtWidgets.QLabel):
         self._show_elided_text()
 
     def _show_elided_text(self):
-        """Show the text, shortened to fit"""
+        """Show the text, shortened to fit, with the whole text as a tooltip if it was shortened"""
         self.ensurePolished()  # So the font is the style sheet's (e.g. bold), which is wider
         # Measure in fractions of a pixel. Rounded to whole pixels, the suffix could measure narrower than it is,
         #   leaving the text a little too long and cutting off the end of the suffix
@@ -450,6 +452,8 @@ class ElidedLabel(QtWidgets.QLabel):
             text = metrics.elidedText(self._suffix, QtCore.Qt.TextElideMode.ElideRight, width)
 
         super().setText(text)
+        full_text = self._text + self._suffix
+        self.setToolTip(full_text if text != full_text else '')
 # endregion
 
 
