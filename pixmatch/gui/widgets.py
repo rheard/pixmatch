@@ -138,7 +138,7 @@ class ImageViewPane(QtWidgets.QWidget):
         self.stack.addWidget(self.scaled)
         self.stack.addWidget(self.scroll)
 
-        self.status = QtWidgets.QLabel(text="Ready", alignment=QtCore.Qt.AlignmentFlag.AlignBottom)
+        self.status = ElidedLabel(text="Ready", alignment=QtCore.Qt.AlignmentFlag.AlignBottom)
         self.status.setContentsMargins(NO_MARGIN)
         self.status.setObjectName("imageStatus")
         self.status.setMaximumHeight(16)
@@ -275,9 +275,10 @@ class ImageViewPane(QtWidgets.QWidget):
         elif modified:
             modified = f"{modified[1]}/{modified[2]}/{modified[0]}"
 
-        self.status.setText(
-            f"{path.absolute()} ("
-            f"{human_bytes(file_size)} {extra}"
+        # If it doesn't fit, shorten the path rather than the details that are for comparing duplicates
+        self.status.set_elided_text(
+            str(path.absolute()),
+            f" ({human_bytes(file_size)} {extra}"
             f"- {object_size.width()},{object_size.height()}px "
             f"- {modified}"
             f")",
@@ -398,6 +399,49 @@ class ScaledLabel(QtWidgets.QLabel):
                 qp, cr, alignment,
                 movie.currentPixmap(),
             )
+
+
+class ElidedLabel(QtWidgets.QLabel):
+    """
+    A one line label that shortens its text with "…" to fit its width, instead of growing to fit its text.
+
+    A long file path in the image preview's status used to force the preview pane (and the window) wider.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Don't let the width of the text set a minimum width for the label, and the layouts it's in
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, self.sizePolicy().verticalPolicy())
+        self._text = self.text()
+        self._suffix = ''
+
+    def setText(self, text: str):
+        """Set the text, which is shortened in the middle if it doesn't fit"""
+        self.set_elided_text(text)
+
+    def set_elided_text(self, text: str, suffix: str = ''):
+        """
+        Set the text to shorten in the middle if it doesn't fit, followed by a suffix that's kept whole.
+
+        The suffix is only shortened (at its end) if it doesn't fit even after all of the text has been shortened away.
+        """
+        self._text = text
+        self._suffix = suffix
+        self._show_elided_text()
+
+    def resizeEvent(self, event):
+        """Shorten the text for the new width"""
+        super().resizeEvent(event)
+        self._show_elided_text()
+
+    def _show_elided_text(self):
+        """Show the text, shortened to fit"""
+        self.ensurePolished()  # So the font is the style sheet's (e.g. bold), which is wider
+        metrics = self.fontMetrics()
+        width = self.contentsRect().width()
+        text_width = max(0, width - metrics.horizontalAdvance(self._suffix))
+        text = metrics.elidedText(self._text, QtCore.Qt.TextElideMode.ElideMiddle, text_width)
+        super().setText(metrics.elidedText(text + self._suffix, QtCore.Qt.TextElideMode.ElideRight, width))
 # endregion
 
 
