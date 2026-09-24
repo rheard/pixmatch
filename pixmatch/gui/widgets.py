@@ -1,7 +1,7 @@
 import io
 
-from collections import OrderedDict
-from contextlib import suppress
+from collections import OrderedDict, defaultdict
+from contextlib import ExitStack, nullcontext, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -54,19 +54,20 @@ STATE_COLORS = {
 
 
 # region Image view panel
-def _load_thumbnail(path: ZipPath, thumb_size: int) -> QtGui.QImage:
+def _load_thumbnail(path: ZipPath, thumb_size: int, zf: ZipFile | None = None) -> QtGui.QImage:
     """
     Load an image from disk as a square thumbnail.
 
     The image is decoded straight to the thumbnail's size, which lets JPEGs skip most of the work of decoding them
         in full (a 4K JPEG took ~78ms to load at full size, and ~19ms this way).
+    If the image is in a zip that is already open, pass it as zf so it isn't opened again.
 
     Returns:
         QtGui.QImage: The thumbnail, which is null if the image couldn't be read.
     """
     if path.subpath:
-        with ZipFile(path.path) as zf:
-            return _decode_thumbnail(zf.read(path.subpath), thumb_size)
+        with nullcontext(zf) if zf is not None else ZipFile(path.path) as zip_file:
+            return _decode_thumbnail(zip_file.read(path.subpath), thumb_size)
 
     reader = QtGui.QImageReader(path.path)
     reader.setScaledSize(QtCore.QSize(thumb_size, thumb_size))
@@ -425,26 +426,39 @@ def _prompt_move_clear(parent, state) -> bool:
 
 
 class _ThumbnailJob(QtCore.QRunnable):
-    """Loads one thumbnail on a ThumbnailLoader's thread pool"""
+    """Loads thumbnails on a ThumbnailLoader's thread pool. A job's paths are all in the same zip, or it has one path"""
 
-    def __init__(self, path: ZipPath, thumb_size: int, loaded: QtCore.SignalInstance):
+    def __init__(self, paths: list[ZipPath], thumb_size: int, loaded: QtCore.SignalInstance):
         super().__init__()
-        self.path = path
+        self.paths = paths
         self.thumb_size = thumb_size
         self.loaded = loaded
 
     def run(self):
-        """Load the thumbnail, and hand it to the GUI thread"""
-        image = QtGui.QImage()
+        """Load the thumbnails, handing each one to the GUI thread as it loads"""
+        remaining = list(self.paths)
         try:
-            # A file (or a file in a zip) that was changed or deleted outside of the app, like a zip whose duplicates
-            #   were cleaned out after it was scanned, gets an empty tile, the same as an image Qt can't read
-            with suppress(KeyError, OSError, BadZipFile):
-                image = _load_thumbnail(self.path, self.thumb_size)
+            with ExitStack() as open_zip:
+                zf = None
+                while remaining:
+                    path = remaining[0]
+                    image = QtGui.QImage()
+                    # A file (or a file in a zip) that was changed or deleted outside of the app, like a zip whose
+                    #   duplicates were cleaned out after it was scanned, gets an empty tile (like images Qt can't read)
+                    with suppress(KeyError, OSError, BadZipFile):
+                        if path.subpath and zf is None:
+                            zf = open_zip.enter_context(ZipFile(path.path))
+                        image = _load_thumbnail(path, self.thumb_size, zf)
+                    self._report(remaining.pop(0), image)
         finally:
-            # Always report back, even if loading failed unexpectedly, so the thumbnail isn't left pending
-            with suppress(RuntimeError):  # The loader was deleted, i.e. the app is closing
-                self.loaded.emit(self.path, self.thumb_size, image)
+            # If loading failed unexpectedly, still report the rest (as empty) so they aren't left pending
+            for path in remaining:
+                self._report(path, QtGui.QImage())
+
+    def _report(self, path: ZipPath, image: QtGui.QImage):
+        """Hand a thumbnail to the GUI thread"""
+        with suppress(RuntimeError):  # The loader was deleted, i.e. the app is closing
+            self.loaded.emit(path, self.thumb_size, image)
 
 
 class ThumbnailLoader(QtCore.QObject):
@@ -470,6 +484,12 @@ class ThumbnailLoader(QtCore.QObject):
         self._pending = set()  # (path, thumb_size) that are loading
         self._imageLoaded.connect(self._on_image_loaded)
 
+        # Images in zips that were asked for, but not started yet: (zip path, thumb_size) -> paths.
+        #   They're started together once the GUI is done asking (e.g. once a page is built), see _start_zip_jobs
+        self._zip_requests = defaultdict(list)
+        self._zip_timer = QtCore.QTimer(self, singleShot=True, interval=0)
+        self._zip_timer.timeout.connect(self._start_zip_jobs)
+
         # The pool waits for every queued thumbnail when it's destroyed, so don't make closing wait for them too
         app = QtCore.QCoreApplication.instance()
         if app is not None:
@@ -490,14 +510,36 @@ class ThumbnailLoader(QtCore.QObject):
 
         if key not in self._pending:
             self._pending.add(key)
-            self._pool.start(_ThumbnailJob(path, thumb_size, self._imageLoaded))
+            if path.subpath:
+                self._zip_requests[path.path, thumb_size].append(path)
+                self._zip_timer.start()
+            else:
+                self._pool.start(_ThumbnailJob([path], thumb_size, self._imageLoaded))
 
         return None
 
     def cancel(self):
         """Stop loading thumbnails that haven't started yet, e.g. because the page they were for has been left"""
+        self._zip_timer.stop()
+        self._zip_requests.clear()
         self._pool.clear()
         self._pending.clear()
+
+    def _start_zip_jobs(self):
+        """
+        Start loading the images in zips that were asked for.
+
+        Opening a zip reads its whole list of files, in Python: ~9ms for a zip of 3000 files, holding the GIL, which
+            slowed down the GUI too. So each zip is opened once per thread that loads images from it,
+            rather than once per image.
+        """
+        for (_, thumb_size), paths in self._zip_requests.items():
+            # Every thread gets some of the zip's images, so they still load in parallel (and the top rows first)
+            jobs = min(self._pool.maxThreadCount(), len(paths))
+            for i in range(jobs):
+                self._pool.start(_ThumbnailJob(paths[i::jobs], thumb_size, self._imageLoaded))
+
+        self._zip_requests.clear()
 
     def _on_image_loaded(self, path: ZipPath, thumb_size: int, image: QtGui.QImage):
         """Keep a thumbnail that finished loading, and pass it on as a QPixmap (which only the GUI thread can make)"""
