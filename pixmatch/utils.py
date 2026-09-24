@@ -35,4 +35,4 @@ def human_bytes(
         # Bytes or integer formatting requested
         return f"{int(n)}{tuple(units)[i]}"
 
-    return f"{n:.{decimals}f}{tuple(units)[i]}".rstrip("0").rstrip(".")
+    return f"{f'{n:.{decimals}f}'.rstrip('0').rstrip('.')}{tuple(units)[i]}"
