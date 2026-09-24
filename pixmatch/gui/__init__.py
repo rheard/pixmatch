@@ -812,11 +812,18 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Set the state of a single file. Every state change should go through here.
 
+        Files are only marked for delete or move while they are in a match group (i.e. they have a duplicate),
+            so bulk actions like "Delete folder" can't reach files that have no duplicate.
         Files in zips are read-only, so they are never marked for delete or move:
             processing them would act on the zip itself, not the file inside it.
         """
-        if path.is_zip and state.state in {SelectionState.DELETE, SelectionState.MOVE}:
-            return
+        if state.state in {SelectionState.DELETE, SelectionState.MOVE}:
+            if path.is_zip:
+                return
+
+            hash_ = self.processor._reverse_hashes.get(path)
+            if hash_ is None or self.processor._hashes[hash_].match_i is None:
+                return
 
         self.file_states[path] = state
 
@@ -898,7 +905,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mark_zip(current_zip_path, SelectionValues.KEEP)
 
     def mark_folder(self, path: ZipPath, selection: SelectionValue):
-        """Mark all files in a folder as a particular state"""
+        """
+        Mark all files in a folder as a particular state.
+
+        Only duplicates can be marked for delete (see set_file_state),
+            so deleting a folder never deletes the files in it that have no duplicate.
+        """
         if not path:
             return
 
