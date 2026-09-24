@@ -30,7 +30,7 @@ EXIF_ORIENTATIONS = {
 
 @lru_cache
 def _dct_basis(img_size: int, hash_size: int) -> np.ndarray:
-    """The lowest frequency rows of an (unnormalized) DCT-II matrix, the same DCT imagehash's phash uses"""
+    """The lowest hash_size frequency rows of an (unnormalized) DCT-II matrix for img_size samples"""
     n = np.arange(img_size)
     k = np.arange(hash_size)[:, None]
     return 2 * np.cos(np.pi * (2 * n + 1) * k / (2 * img_size))
@@ -67,7 +67,8 @@ def phash(px: np.ndarray) -> int:
     """
     Perceptual hash of an already resized grayscale array.
 
-    This is the same algorithm (and gives the same bits) as imagehash's phash.
+    This takes the 2D DCT of the array and keeps its lowest HASH_SIZE x HASH_SIZE frequencies,
+        and each bit is whether that frequency's coefficient is above the median of them all.
 
     Returns:
         int: The 64 hash bits, in row-major order with the first bit being the most significant.
