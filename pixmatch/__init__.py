@@ -6,6 +6,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
+from itertools import combinations
 from multiprocessing import Manager, Pool
 from os import cpu_count
 from pathlib import Path
@@ -70,34 +71,15 @@ def _is_under(folder_abs: str, target: str | Path) -> bool:
     return True
 
 
-def phash_params_for_strength(strength: int) -> tuple[int, int]:
-    """
-    Convert a 0-10 strength to settings for the perceptual hash
+HASH_SIZE = 8  # Hashes are HASH_SIZE x HASH_SIZE = 64 bits
+HASH_IMG_SIZE = HASH_SIZE * 4  # Images are shrunk to this many pixels square to be hashed
 
-    Returns:
-        tuple<int, int>: The hash size (in bytes) and the high frequency factor
-    """
-    # TODO: This sucks.
-    strength = max(0, min(10, strength))
-    if strength >= 10:
-        return 16, 4
-    if strength >= 9:
-        return 12, 4
-    if strength >= 8:
-        return 12, 3
-    if strength >= 7:
-        return 10, 3
-    if strength >= 6:
-        return 9, 3
-    if strength >= 5:
-        return 8, 3
-    if strength >= 4:
-        return 7, 3
-    if strength >= 3:
-        return 6, 3
-    if strength >= 2:
-        return 5, 3
-    return 5, 2
+# The most bits two images' hashes can differ by to match, for each strength from 0 (loose) to 10 (strict).
+#   Every hash has exactly 32 of its 64 bits set, so two hashes always differ by an even number of bits.
+#   From testing: re-saves, resizes, format changes, rotations and small brightness or color changes land within
+#   2-4 bits, and trimming 1% off each side within 6. Unrelated images were more than 6 apart (and usually 20+).
+#   Past 8 bits, HammingIndex gets much slower (~16ms per image with a million or more images loaded).
+STRENGTH_RADIUS = (8, 8, 8, 6, 6, 4, 4, 2, 2, 0, 0)
 
 
 # A frame whose pixels vary less than this (on a 0-255 scale, after resizing) is blank, like a GIF's empty first frame.
@@ -153,41 +135,40 @@ def _orientations(px: np.ndarray):
         yield np.fliplr(rotated)
 
 
-def _phash(px: np.ndarray, hash_size: int) -> int:
+def _phash(px: np.ndarray) -> int:
     """
     Perceptual hash of an already resized grayscale array.
 
     This is the same algorithm (and gives the same bits) as imagehash's phash.
 
     Returns:
-        int: The hash bits, in row-major order with the first bit being the most significant.
+        int: The 64 hash bits, in row-major order with the first bit being the most significant.
     """
-    basis = _dct_basis(px.shape[0], hash_size)
+    basis = _dct_basis(px.shape[0], HASH_SIZE)
     dct = basis @ px @ basis.T
     bits = (dct > np.median(dct)).ravel()
-    return int.from_bytes(np.packbits(bits).tobytes(), "big") >> (-bits.size % 8)
+    return int.from_bytes(np.packbits(bits).tobytes(), "big")
 
 
-def _hash_hex(value: int, bits: int) -> str:
-    """Format a hash as hex, matching the str() of an imagehash hash"""
-    return f"{value:0{(bits + 3) // 4}x}"
+# Every rotation of a blank image is the same blank image, and its only meaningful bit is the first (DC) one
+FLAT_HASH = 1 << (HASH_SIZE * HASH_SIZE - 1)
 
 
-def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple[str, set[str]]:
+def calculate_hashes(f, *, is_gif=False, exact_match=False) -> tuple[int | str, set[int]]:
     """
     Calculate hashes for a given file.
 
     Args:
         f (IO or str or Path): Either a file path to process, or a in-memory BytesIO object ready for reading.
-        strength (int): A number between 0 and 10 on the strength of the matches.
         is_gif (bool): Is this gif data? Needed if passing an in-memory BytesIO object.
         exact_match (bool): Use exact SHA256 hahes?
             If true, strength must be 10.
             If false, perceptual hashes will be used, even with high strength.
 
     Returns:
-        tuple[str, set]: The first element is the primary hash,
+        tuple[int | str, set]: The first element is the primary hash,
             the second element are any secondary hashes representing rotations, flips, etc...
+            Perceptual hashes are 64-bit ints, and the SHA256 hash is a hex string (with no secondary hashes).
     """
     if exact_match:
         hasher = hashlib.sha256()
@@ -197,12 +178,9 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple
                 hasher.update(block)
         return hasher.hexdigest(), set()
 
-    hash_size, highfreq_factor = phash_params_for_strength(strength)
-    img_size = hash_size * highfreq_factor
-    bits = hash_size * hash_size
     with Image.open(f) as im:
         orientation = im.getexif().get(EXIF_ORIENTATION_TAG, 1)
-        px = _grayscale_pixels(im, img_size)
+        px = _grayscale_pixels(im, HASH_IMG_SIZE)
         if is_gif:
             # Some animations start with a blank frame (nothing, or only a single color). Its hash would be noise
             #   that happens to be shared by other blank frames, so use the first frame that has something in it.
@@ -212,20 +190,19 @@ def calculate_hashes(f, strength=5, *, is_gif=False, exact_match=False) -> tuple
                 except EOFError:  # noqa: PERF203
                     break
                 else:
-                    px = _grayscale_pixels(im, img_size)
+                    px = _grayscale_pixels(im, HASH_IMG_SIZE)
 
     # Hash the image the way it is displayed, not the way it is stored
     if orientation in _EXIF_ORIENTATIONS:
         px = _EXIF_ORIENTATIONS[orientation](px)
 
     if _is_flat(px):
-        # Every rotation of a blank image is the same blank image, and its only meaningful bit is the first (DC) one
-        return _hash_hex(1 << (bits - 1), bits), set()
+        return FLAT_HASH, set()
 
     # All the rotations and mirrors are made from the one small resized array, which is far cheaper than
     #   transforming the full size image. For GIFs we'll look for mirrored versions but thats it
     variants = (px, np.fliplr(px)) if is_gif else tuple(_orientations(px))
-    initial_hash, *extras = (_hash_hex(_phash(variant, hash_size), bits) for variant in variants)
+    initial_hash, *extras = (_phash(variant) for variant in variants)
     return initial_hash, set(extras)
 
 
@@ -247,7 +224,6 @@ def thread_error_handler(func):
 def _process_image(
         path: str | Path,
         supported_extensions: set | None = None,
-        strength: int = 5,
         *,
         exact_match: bool = False,
 ) -> tuple[Path, tuple | dict[str, tuple]]:
@@ -255,7 +231,7 @@ def _process_image(
     path = Path(path)
     if path.suffix.lower() != '.zip':
         return path, calculate_hashes(path, is_gif=path.suffix.lower() in {".gif", ".webp"},
-                                      strength=strength, exact_match=exact_match)
+                                      exact_match=exact_match)
 
     if not supported_extensions:
         supported_extensions = ImageMatcher.SUPPORTED_EXTS
@@ -274,7 +250,7 @@ def _process_image(
             try:
                 with zf.open(f) as zipped_file:
                     results[f.filename] = calculate_hashes(zipped_file, is_gif=f_ext in {".gif", ".webp"},
-                                                           strength=strength, exact_match=exact_match)
+                                                           exact_match=exact_match)
             except BadZipFile as e:
                 logger.warning("Could not read %s in %s due to %s", f.filename, path, str(e))
             except UnidentifiedImageError:
@@ -313,12 +289,89 @@ MatcherEvent = Union[NewGroup, NewMatch, Finished]
 # endregion
 
 
+class HammingIndex:
+    """
+    Finds the stored hashes within some number of differing bits (radius) of a hash, without checking all of them.
+
+    This is multi-index hashing: every hash is split into chunks, and each chunk gets its own lookup table.
+    If two hashes are within the radius, then (by the pigeonhole principle) at least one of their chunks differs by
+    no more than radius // CHUNKS bits. So looking up every value that close to each of a hash's chunks finds every
+    stored hash that could be in range, and only those candidates get compared in full.
+
+    Args:
+        radius (int): The most bits a stored hash can differ by to be found.
+    """
+    BITS = HASH_SIZE * HASH_SIZE
+    CHUNKS = 3  # 21-22 bit chunks keep the tables' buckets small, even with a couple million hashes stored
+
+    def __init__(self, radius: int):
+        self.radius = radius
+        widths = [self.BITS // self.CHUNKS + (i < self.BITS % self.CHUNKS) for i in range(self.CHUNKS)]
+
+        # For each chunk: where it is in the hash, and every change to it of at most radius // CHUNKS bits
+        self._chunks = []
+        shift = 0
+        for width in widths:
+            flips = [sum(1 << bit for bit in bits)
+                     for n in range(radius // self.CHUNKS + 1) for bits in combinations(range(width), n)]
+            self._chunks.append((shift, (1 << width) - 1, flips))
+            shift += width
+
+        # Chunk value -> the stored hash with that chunk value, or a list of them if there are several.
+        #   Most chunk values only ever belong to one hash, so skipping the list for those saves a lot of memory.
+        self._tables = [{} for _ in widths]
+
+    def add(self, hash_: int):
+        """Store a hash"""
+        for (shift, mask, _), table in zip(self._chunks, self._tables):
+            key = hash_ >> shift & mask
+            stored = table.get(key)
+            if stored is None:
+                table[key] = hash_
+            elif isinstance(stored, list):
+                stored.append(hash_)
+            else:
+                table[key] = [stored, hash_]
+
+    def remove(self, hash_: int):
+        """Remove a stored hash"""
+        for (shift, mask, _), table in zip(self._chunks, self._tables):
+            key = hash_ >> shift & mask
+            stored = table[key]
+            if stored == hash_:
+                del table[key]
+                continue
+
+            stored.remove(hash_)
+            if len(stored) == 1:
+                table[key] = stored[0]
+
+    def find(self, hash_: int) -> dict[int, int]:
+        """Find the stored hashes within the radius of a hash, as a dict of stored hash -> bits different"""
+        found = {}
+        for (shift, mask, flips), table in zip(self._chunks, self._tables):
+            key = hash_ >> shift & mask
+            for flip in flips:
+                stored = table.get(key ^ flip)
+                if stored is None:
+                    continue
+
+                for candidate in (stored if isinstance(stored, list) else (stored, )):
+                    if candidate not in found:
+                        distance = (candidate ^ hash_).bit_count()
+                        if distance <= self.radius:
+                            found[candidate] = distance
+
+        return found
+
+
 class ImageMatcher:
     """
     An image matching SDK
 
     Args:
         strength (int): The 0-10 strength to use for matching. Defaults to 5.
+            STRENGTH_RADIUS has how many bits two images' hashes can differ by at each strength.
         exact_match (bool): Should use SHA-256 hashes? If False, the default, will use perceptual hashes.
             If True, strength must be 10.
         processes (int): The number of processes to use. Defaults to None.
@@ -334,6 +387,7 @@ class ImageMatcher:
         self.extensions = extensions or self.SUPPORTED_EXTS
 
         self.strength = strength
+        self.radius = STRENGTH_RADIUS[strength]
         self.exact_match = exact_match
         self.processes = processes
 
@@ -350,6 +404,9 @@ class ImageMatcher:
         self._processed_zips = {}  # Zips that have been successfully processed
         self._hashes = defaultdict(ImageMatch)  # Hash -> Paths
         self._reverse_hashes = {}  # Path -> Hash
+
+        # Finds the hashes of _hashes that are close to an image's hashes. Not needed if they must be identical
+        self._index = HammingIndex(self.radius) if self.radius and not exact_match else None
 
         # Pausing and finished signaling...
         self._not_paused = Event()
@@ -453,6 +510,8 @@ class ImageMatcher:
         elif not self._hashes[hash_].matches:
             logger.debug('Removing empty match group')
             del self._hashes[hash_]
+            if self._index is not None:
+                self._index.remove(hash_)
 
         else:
             logger.debug('Simple removal performed')
@@ -498,6 +557,30 @@ class ImageMatcher:
         """Update the match_i value for all the matches passed a certain point"""
         for match_i, match in enumerate(self.matches[start:], start=start):
             match.match_i = match_i
+
+    def _find_group(self, hashes: set) -> int | str | None:
+        """
+        Find the group an image belongs to.
+
+        Args:
+            hashes (set): All of the image's hashes (every rotation and mirror of it).
+
+        Returns:
+            int | str | None: The key in _hashes of the closest group, or None if no group is close enough.
+        """
+        if self._index is None:
+            # From testing at ~1.5m loaded images: it is ~10% faster to return a set and do this than it is to
+            #   iterate over a list and do an `is in` check for each hash
+            found_hashes = self._hashes.keys() & hashes
+            return min(found_hashes) if found_hashes else None
+
+        closest = None
+        for hash_ in hashes:
+            for found_hash, distance in self._index.find(hash_).items():
+                if closest is None or (distance, found_hash) < closest:
+                    closest = (distance, found_hash)
+
+        return None if closest is None else closest[1]
 
     def _process_image_callback(self, result):
         """
@@ -554,19 +637,18 @@ class ImageMatcher:
 
         self.processed_images += 1
 
-        # From testing at ~1.5m loaded images: it is ~10% faster to return a set and do this than it is to
-        #   iterate over a list and do an `is in` check for each hash
-        found_hashes = self._hashes.keys() & extra_hashes
-        if not found_hashes:
+        hash_ = self._find_group(extra_hashes)
+        if hash_ is None:
             # This is a new image not matching any previous, so just add it to the hashmap and move on...
             #   Just use the initial orientation
             hash_ = initial_hash
             self._reverse_hashes[path] = hash_
             self._hashes[hash_].matches.append(path)
+            if self._index is not None:
+                self._index.add(hash_)
             return
 
         # We have found a match!
-        hash_ = next(iter(found_hashes))
         self._reverse_hashes[path] = hash_
         self._hashes[hash_].matches.append(path)
 
@@ -655,7 +737,6 @@ class ImageMatcher:
                             _process_image,
                             args=(f, ),
                             kwds={
-                                'strength': self.strength,
                                 'supported_extensions': self.extensions,
                                 'exact_match': self.exact_match,
                             },
