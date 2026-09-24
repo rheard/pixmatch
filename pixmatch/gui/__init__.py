@@ -1102,97 +1102,109 @@ class MainWindow(QtWidgets.QMainWindow):
         self.count_label = QtWidgets.QLabel("No groups loaded")
         sb.addPermanentWidget(self.count_label)
 
+    def delete_file(self, path: Path) -> int:
+        """
+        Delete a file, or send it to the recycle bin if that option is set.
+
+        Returns:
+            int: The size of the file that was deleted.
+        """
+        file_size = path.stat().st_size
+        if self.recycle:
+            logger.info("Moving to recycle: %s", path)
+            send2trash(path)
+        else:
+            logger.info("Deleting %s", path)
+            path.unlink()
+
+        return file_size
+
     def process_file_states(self, states: set[SelectionState] | None = None):
         """Process the set file states"""
+        if not self.processor:
+            return
+
         is_paused = self.processor.conditional_pause()
         self.image_view_area.clear()
 
-        if not states:
-            states = {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE}
-
+        states = set(states or {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE})
         states.add(SelectionState.KEEP)
+        to_process = {k: v for k, v in self.file_states.items() if v.state in states}
 
         file_size_deleted = 0
         file_count_deleted = 0
         file_count_ignored = 0
         file_count_moved = 0
-        failed_file_deletes = []
+        processed_files = set()
+        failed_files = []
 
-        for file, set_state in self.file_states.items():
-            if set_state.state not in states:
-                continue
-
-            if set_state.state == SelectionState.DELETE:
-                path = file.path_obj
-                try:
-                    file_size_deleted += path.stat().st_size
-
-                    if self.recycle:
-                        logger.info("Moving to recycle: %s", file)
-                        send2trash(path)
-                    else:
-                        logger.info("Deleting %s", file)
-                        path.unlink()
-                except PermissionError:
-                    logger.info("Failed to delete %s, it is in use!", file)
-                    failed_file_deletes.append(file)
+        try:
+            for file, set_state in to_process.items():
+                if set_state.state == SelectionState.KEEP:
+                    processed_files.add(file)
                     continue
-                except FileNotFoundError:
-                    logger.info("File already deleted...", file)
 
-                self.processor.remove(file)
-                file_count_deleted += 1
-            elif set_state.state == SelectionState.IGNORE:
-                self.processor.ignore(file)
-                file_count_ignored += 1
-            elif set_state.state == SelectionState.KEEP:
-                pass
-            elif set_state.state == SelectionState.MOVE:
-                destination = Path(set_state.args[0])
-                if destination.is_dir():
-                    destination /= file.path_obj.name
+                if set_state.state not in {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE}:
+                    raise NotImplementedError(f"Unknown state {set_state.state.value}")
 
-                if destination.is_file():
-                    destination.unlink()
+                try:
+                    if set_state.state == SelectionState.DELETE:
+                        try:
+                            file_size_deleted += self.delete_file(file.path_obj)
+                            file_count_deleted += 1
+                        except FileNotFoundError:
+                            logger.info("File already deleted: %s", file)
 
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                logger.info("Moving %s to %s", file.path_obj, destination)
-                shutil.move(str(file.path_obj), str(destination))
+                        self.processor.remove(file)
+                    elif set_state.state == SelectionState.IGNORE:
+                        self.processor.ignore(file)
+                        file_count_ignored += 1
+                    else:  # SelectionState.MOVE
+                        destination = Path(set_state.args[0])
+                        if destination.is_dir():
+                            destination /= file.path_obj.name
 
-                if any(_is_under(f, destination) for f in self.file_paths_selected()):
-                    dest = ZipPath(str(destination))
-                    hash_ = self.processor._reverse_hashes.pop(file)
-                    self.processor._reverse_hashes[dest] = hash_
+                        if destination.is_file():
+                            destination.unlink()
 
-                    self.processor._hashes[hash_].matches.remove(file)
-                    self.processor._hashes[hash_].matches.append(dest)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        logger.info("Moving %s to %s", file.path_obj, destination)
+                        shutil.move(str(file.path_obj), str(destination))
+
+                        if any(_is_under(f, destination) for f in self.file_paths_selected()):
+                            dest = ZipPath(str(destination))
+                            hash_ = self.processor._reverse_hashes.pop(file)
+                            self.processor._reverse_hashes[dest] = hash_
+
+                            self.processor._hashes[hash_].matches.remove(file)
+                            self.processor._hashes[hash_].matches.append(dest)
+                        else:
+                            # This file is no longer in a selected folder! So remove it from the matching
+                            self.processor.remove(file)
+                            file_count_ignored += 1
+                        file_count_moved += 1
+                except OSError as e:
+                    # e.g. the file is open in another program. Leave it marked so it can be tried again
+                    logger.warning("Failed to %s %s: %s", set_state.state.value, file, e)
+                    failed_files.append(file)
                 else:
-                    # This file is no longer in a selected folder! So remove it from the matching
-                    self.processor.remove(file)
-                    file_count_ignored += 1
-                file_count_moved += 1
-            else:
-                raise NotImplementedError(f"Unknown state {set_state.state.value}")
+                    processed_files.add(file)
+        finally:
+            # Clear the states which we have processed
+            self.file_states = {k: v for k, v in self.file_states.items() if k not in processed_files}
 
-        # Clear the states which we have processed
-        self.file_states = {
-            k: v
-            for k, v in self.file_states.items()
-            if v.state not in states or k in failed_file_deletes
-        }
+            # If total pages has decreased passed the current page, then make sure to set the current page
+            if self.current_page > self.total_pages:
+                self.current_page = self.total_pages
 
-        # If total pages has decreased passed the current page, then make sure to set the current page
-        if self.current_page > self.total_pages:
-            self.current_page = self.total_pages
+            # Update the GUI:
+            self.deleted_files_size += file_size_deleted
+            self.deleted_files_count += file_count_deleted
+            self.update_labels()
+            self.update_group_list()
 
-        # Update the GUI:
-        self.deleted_files_size += file_size_deleted
-        self.deleted_files_count += file_count_deleted
-        self.update_labels()
-        self.update_group_list()
-
-        # Resume processing
-        self.processor.conditional_resume(is_paused)
+            # Resume processing
+            self.processor.conditional_resume(is_paused)
 
         # region Final status popup
         popup_text = ""
@@ -1205,6 +1217,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if file_count_moved:
             popup_text += f"Moved {file_count_moved} file.\n"
+
+        if failed_files:
+            popup_text += f"Failed to process {len(failed_files)} files (see the log), they are still marked.\n"
 
         if popup_text:
             dlg = QtWidgets.QMessageBox(self)
