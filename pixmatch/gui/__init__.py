@@ -412,7 +412,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.precision_slider = QtWidgets.QSlider(tickPosition=QtWidgets.QSlider.TickPosition.TicksLeft)
         self.precision_slider.setMaximum(10)
         self.precision_slider.setValue(5)
-        self.precision_slider.sliderMoved.connect(self.on_precision_adjust)
+        self.precision_slider.valueChanged.connect(self.on_precision_adjust)
 
         filter_tab_main = QtWidgets.QHBoxLayout()
         filter_tab_main.setContentsMargins(NO_MARGIN)
