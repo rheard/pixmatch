@@ -1,10 +1,12 @@
+from collections import OrderedDict
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from functools import cache, lru_cache
 from pathlib import Path
 from typing import Sequence
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -396,6 +398,96 @@ def _prompt_move_clear(parent, state) -> bool:
     return response == QtWidgets.QMessageBox.StandardButton.Yes
 
 
+class _ThumbnailJob(QtCore.QRunnable):
+    """Loads one thumbnail on a ThumbnailLoader's thread pool"""
+
+    def __init__(self, path: ZipPath, thumb_size: int, loaded: QtCore.SignalInstance):
+        super().__init__()
+        self.path = path
+        self.thumb_size = thumb_size
+        self.loaded = loaded
+
+    def run(self):
+        """Load the thumbnail, and hand it to the GUI thread"""
+        image = QtGui.QImage()
+        try:
+            # A file (or a file in a zip) that was changed or deleted outside of the app, like a zip whose duplicates
+            #   were cleaned out after it was scanned, gets an empty tile, the same as an image Qt can't read
+            with suppress(KeyError, OSError, BadZipFile):
+                image = _load_thumbnail(self.path, self.thumb_size)
+        finally:
+            # Always report back, even if loading failed unexpectedly, so the thumbnail isn't left pending
+            with suppress(RuntimeError):  # The loader was deleted, i.e. the app is closing
+                self.loaded.emit(self.path, self.thumb_size, image)
+
+
+class ThumbnailLoader(QtCore.QObject):
+    """
+    Loads thumbnails on a thread pool, and keeps the most recently used ones.
+
+    Loading a page's thumbnails on the GUI thread froze it until every image was decoded (seconds, for large photos).
+        This way the page shows straight away, each thumbnail appears as soon as it loads,
+        and thumbnails that were shown recently appear instantly.
+
+    Signals:
+        thumbnailLoaded(path: ZipPath, thumb_size: int, pixmap: QPixmap): A thumbnail from `get` has loaded.
+    """
+    thumbnailLoaded = QtCore.Signal(ZipPath, int, QtGui.QPixmap)
+    _imageLoaded = QtCore.Signal(ZipPath, int, QtGui.QImage)  # Emitted on the pool's threads, handled on the GUI's
+
+    def __init__(self, parent=None, *, threads: int = 4, cache_size: int = 2000):
+        super().__init__(parent)
+        self._pool = QtCore.QThreadPool(self)
+        self._pool.setMaxThreadCount(threads)
+        self._cache_size = cache_size
+        self._cache = OrderedDict()  # (path, thumb_size) -> QPixmap, least recently used first
+        self._pending = set()  # (path, thumb_size) that are loading
+        self._imageLoaded.connect(self._on_image_loaded)
+
+        # The pool waits for every queued thumbnail when it's destroyed, so don't make closing wait for them too
+        app = QtCore.QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.cancel)
+
+    def get(self, path: ZipPath, thumb_size: int) -> QtGui.QPixmap | None:
+        """
+        Get a thumbnail if it was loaded recently, otherwise start loading it.
+
+        Returns:
+            QtGui.QPixmap | None: The thumbnail, or None if it is loading. thumbnailLoaded is emitted when it's ready.
+        """
+        key = (path, thumb_size)
+        pixmap = self._cache.get(key)
+        if pixmap is not None:
+            self._cache.move_to_end(key)
+            return pixmap
+
+        if key not in self._pending:
+            self._pending.add(key)
+            self._pool.start(_ThumbnailJob(path, thumb_size, self._imageLoaded))
+
+        return None
+
+    def cancel(self):
+        """Stop loading thumbnails that haven't started yet, e.g. because the page they were for has been left"""
+        self._pool.clear()
+        self._pending.clear()
+
+    def _on_image_loaded(self, path: ZipPath, thumb_size: int, image: QtGui.QImage):
+        """Keep a thumbnail that finished loading, and pass it on as a QPixmap (which only the GUI thread can make)"""
+        key = (path, thumb_size)
+        self._pending.discard(key)
+        pixmap = QtGui.QPixmap.fromImage(image)
+        if not pixmap.isNull():
+            # Images that couldn't be read aren't kept, so they're tried again the next time they're shown
+            self._cache[key] = pixmap
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._cache_size:
+                self._cache.popitem(last=False)
+
+        self.thumbnailLoaded.emit(path, thumb_size, pixmap)
+
+
 class ThumbnailTile(QtWidgets.QFrame):
     """
     Clickable thumbnail tile that cycles between KEEP → DELETE → IGNORE.
@@ -552,6 +644,10 @@ class ThumbnailTile(QtWidgets.QFrame):
         """Move button pressed, so emit"""
         self.move.emit(self._path)
 
+    def set_pixmap(self, pixmap: QtGui.QPixmap):
+        """Show the thumbnail image (a tile can be made before its thumbnail has loaded)"""
+        self._image.setPixmap(pixmap)
+
     @property
     def path(self) -> ZipPath:
         """The internal file path"""
@@ -666,10 +762,12 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     tileUnmarkFolder = QtCore.Signal(ZipPath)
     tileUnmarkZip = QtCore.Signal(ZipPath)
 
-    def __init__(self, images: Sequence[ZipPath], thumb_size: int = 32, parent=None):
+    def __init__(self, images: Sequence[ZipPath], thumb_size: int = 32, parent=None, *, thumbnails: ThumbnailLoader):
         super().__init__(parent)
         self._tiles: list[ThumbnailTile] = []
         self._thumb_size = thumb_size
+        self._thumbnails = thumbnails
+        self._thumbnails.thumbnailLoaded.connect(self._on_thumbnail_loaded)
         self.layout = QtWidgets.QHBoxLayout(self)
         self.layout.setContentsMargins(NO_MARGIN)
         self.layout.setSpacing(0)
@@ -689,15 +787,9 @@ class DuplicateGroupRow(QtWidgets.QWidget):
 
     def add_tile(self, path: ZipPath):
         """Add a new tile to this duplicate group"""
-        try:
-            # This is just a personal thing...
-            #   I've found duplicates in my zips, gone and cleaned them,
-            #   and then it messed up loading thumbnails here...
-            pm = QtGui.QPixmap.fromImage(_load_thumbnail(path, self._thumb_size))
-        except (KeyError, FileNotFoundError):
-            pm = None
-
-        tile = ThumbnailTile(path=path, pixmap=pm, thumb_size=self._thumb_size)
+        # If the thumbnail wasn't loaded recently, the tile starts empty and it's shown once it loads
+        pixmap = self._thumbnails.get(path, self._thumb_size)
+        tile = ThumbnailTile(path=path, pixmap=pixmap, thumb_size=self._thumb_size)
         tile.stateChanged.connect(self.tileStateChanged)
         tile.hovered.connect(self.tileHovered)
         tile.move.connect(self.tileMove)
@@ -714,6 +806,15 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         tile.unmarkZip.connect(self.tileUnmarkZip)
         self._tiles.append(tile)
         self.layout.insertWidget(len(self._tiles) - 1, tile)
+
+    def _on_thumbnail_loaded(self, path: ZipPath, thumb_size: int, pixmap: QtGui.QPixmap):
+        """A thumbnail finished loading, so show it on this group's tiles for that image"""
+        if thumb_size != self._thumb_size:
+            return
+
+        for tile in self._tiles:
+            if tile.path == path:
+                tile.set_pixmap(pixmap)
 
     def on_mark_delete_column(self, target_path: ZipPath):
         """Mark delete column has been clicked, convert from a path to an integer"""
@@ -786,6 +887,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         super().__init__(parent, **kwargs)
         self._max_rows = max_rows
         self._thumb_size = thumb_size
+        self._thumbnails = ThumbnailLoader(self)
 
         self._scroll = QtWidgets.QScrollArea(widgetResizable=True)
         self._container = QtWidgets.QWidget()
@@ -853,7 +955,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         if len(self._rows) == self._max_rows:
             raise ValueError("Cannot add a new group to a fully filled group list!")
 
-        row = DuplicateGroupRow(group, thumb_size=self._thumb_size)
+        row = DuplicateGroupRow(group, thumb_size=self._thumb_size, thumbnails=self._thumbnails)
         row.tileStateChanged.connect(self.groupTileStateChanged)
         row.tileHovered.connect(self.groupTileHovered)
         row.tileMove.connect(self.groupTileMove)
@@ -880,6 +982,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
 
     def clear(self):
         """Reset this widget"""
+        self._thumbnails.cancel()  # Any thumbnails still waiting to load were for these rows
         for row in self._rows:
             row.setParent(None)
             row.deleteLater()
