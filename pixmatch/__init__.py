@@ -5,7 +5,7 @@ import time
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from functools import lru_cache, wraps
+from functools import wraps
 from itertools import combinations
 from multiprocessing import Manager, Pool
 from os import cpu_count
@@ -17,6 +17,8 @@ from zipfile import BadZipFile, ZipFile
 import numpy as np
 
 from PIL import Image, ImageFile, UnidentifiedImageError
+
+from pixmatch import phash
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True  # Allow damaged images
 
@@ -71,9 +73,6 @@ def _is_under(folder_abs: str, target: str | Path) -> bool:
     return True
 
 
-HASH_SIZE = 8  # Hashes are HASH_SIZE x HASH_SIZE = 64 bits
-HASH_IMG_SIZE = HASH_SIZE * 4  # Images are shrunk to this many pixels square to be hashed
-
 # The most bits two images' hashes can differ by to match, for each strength from 0 (loose) to 10 (strict).
 #   Every hash has exactly 32 of its 64 bits set, so two hashes always differ by an even number of bits.
 #   From testing: re-saves, resizes, format changes, rotations and small brightness or color changes land within
@@ -84,78 +83,6 @@ STRENGTH_RADIUS = (8, 8, 8, 6, 6, 4, 4, 2, 2, 0, 0)
 # Decoding JPEGs at a reduced size (see calculate_hashes' draft) can move a hash by up to 2 bits. That is harmless
 #   when matches can differ by at least this many bits, but loses matches at stricter strengths.
 DRAFT_RADIUS = 4
-
-
-# A frame whose pixels vary less than this (on a 0-255 scale, after resizing) is blank, like a GIF's empty first frame.
-#   A blank frame has no detail for the hash to describe, so its hash bits would just be floating point noise.
-FLAT_STD = 2.0
-
-EXIF_ORIENTATION_TAG = 0x0112
-
-# The numpy equivalent of the transpose that ImageOps.exif_transpose applies for each EXIF orientation
-_EXIF_ORIENTATIONS = {
-    2: np.fliplr,  # FLIP_LEFT_RIGHT
-    3: lambda px: np.rot90(px, 2),  # ROTATE_180
-    4: np.flipud,  # FLIP_TOP_BOTTOM
-    5: np.transpose,  # TRANSPOSE
-    6: lambda px: np.rot90(px, 3),  # ROTATE_270
-    7: lambda px: np.rot90(px, 2).T,  # TRANSVERSE
-    8: lambda px: np.rot90(px, 1),  # ROTATE_90
-}
-
-
-@lru_cache
-def _dct_basis(img_size: int, hash_size: int) -> np.ndarray:
-    """The lowest frequency rows of an (unnormalized) DCT-II matrix, the same DCT imagehash's phash uses"""
-    n = np.arange(img_size)
-    k = np.arange(hash_size)[:, None]
-    return 2 * np.cos(np.pi * (2 * n + 1) * k / (2 * img_size))
-
-
-def _grayscale_pixels(im: Image.Image, img_size: int) -> np.ndarray:
-    """Convert an image (or the current frame of an animation) to an img_size x img_size grayscale array"""
-    if im.mode in {"RGBA", "RGBa", "LA", "La", "PA"} or "transparency" in im.info:
-        # Converting straight to grayscale throws away alpha and hashes whatever colors hide under transparent pixels.
-        #   So put the image on a white background first, the same as a copy of it that was flattened would be
-        im = im.convert("RGBA")
-        im = Image.alpha_composite(Image.new("RGBA", im.size, "white"), im)
-    elif im.mode.startswith("I;16"):
-        # Pillow clips 16-bit values to 0-255 when converting to grayscale, which turns nearly everything white
-        im = Image.fromarray((np.asarray(im) >> 8).astype(np.uint8))
-
-    return np.asarray(im.convert("L").resize((img_size, img_size), Image.Resampling.LANCZOS), dtype=np.float64)
-
-
-def _is_flat(px: np.ndarray) -> bool:
-    """Is this grayscale array blank (nothing, or only a single color)?"""
-    return px.std() < FLAT_STD
-
-
-def _orientations(px: np.ndarray):
-    """Yield the 8 rotations and mirrors of px, starting with px itself"""
-    for k in range(4):
-        rotated = np.rot90(px, k)
-        yield rotated
-        yield np.fliplr(rotated)
-
-
-def _phash(px: np.ndarray) -> int:
-    """
-    Perceptual hash of an already resized grayscale array.
-
-    This is the same algorithm (and gives the same bits) as imagehash's phash.
-
-    Returns:
-        int: The 64 hash bits, in row-major order with the first bit being the most significant.
-    """
-    basis = _dct_basis(px.shape[0], HASH_SIZE)
-    dct = basis @ px @ basis.T
-    bits = (dct > np.median(dct)).ravel()
-    return int.from_bytes(np.packbits(bits).tobytes(), "big")
-
-
-# Every rotation of a blank image is the same blank image, and its only meaningful bit is the first (DC) one
-FLAT_HASH = 1 << (HASH_SIZE * HASH_SIZE - 1)
 
 
 def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tuple[int | str, set[int]]:
@@ -187,31 +114,31 @@ def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tupl
         if draft:
             # JPEGs can be decoded at 1/2 to 1/8 of their size (and straight to grayscale), which is several times
             #   faster than decoding all of a large photo just to shrink it. This does nothing for other formats.
-            im.draft("L", (HASH_IMG_SIZE * 4, HASH_IMG_SIZE * 4))
-        orientation = im.getexif().get(EXIF_ORIENTATION_TAG, 1)
-        px = _grayscale_pixels(im, HASH_IMG_SIZE)
+            im.draft("L", (phash.HASH_IMG_SIZE * 4, phash.HASH_IMG_SIZE * 4))
+        orientation = im.getexif().get(phash.EXIF_ORIENTATION_TAG, 1)
+        px = phash.grayscale_pixels(im, phash.HASH_IMG_SIZE)
         if is_gif:
             # Some animations start with a blank frame (nothing, or only a single color). Its hash would be noise
             #   that happens to be shared by other blank frames, so use the first frame that has something in it.
-            while _is_flat(px):
+            while phash.is_flat(px):
                 try:
                     im.seek(im.tell() + 1)
                 except EOFError:  # noqa: PERF203
                     break
                 else:
-                    px = _grayscale_pixels(im, HASH_IMG_SIZE)
+                    px = phash.grayscale_pixels(im, phash.HASH_IMG_SIZE)
 
     # Hash the image the way it is displayed, not the way it is stored
-    if orientation in _EXIF_ORIENTATIONS:
-        px = _EXIF_ORIENTATIONS[orientation](px)
+    if orientation in phash.EXIF_ORIENTATIONS:
+        px = phash.EXIF_ORIENTATIONS[orientation](px)
 
-    if _is_flat(px):
-        return FLAT_HASH, set()
+    if phash.is_flat(px):
+        return phash.FLAT_HASH, set()
 
     # All the rotations and mirrors are made from the one small resized array, which is far cheaper than
     #   transforming the full size image. For GIFs we'll look for mirrored versions but thats it
-    variants = (px, np.fliplr(px)) if is_gif else tuple(_orientations(px))
-    initial_hash, *extras = (_phash(variant) for variant in variants)
+    variants = (px, np.fliplr(px)) if is_gif else tuple(phash.orientations(px))
+    initial_hash, *extras = (phash.phash(variant) for variant in variants)
     return initial_hash, set(extras)
 
 
@@ -311,7 +238,7 @@ class HammingIndex:
     Args:
         radius (int): The most bits a stored hash can differ by to be found.
     """
-    BITS = HASH_SIZE * HASH_SIZE
+    BITS = phash.HASH_SIZE * phash.HASH_SIZE
     CHUNKS = 3  # 21-22 bit chunks keep the tables' buckets small, even with a couple million hashes stored
 
     def __init__(self, radius: int):
