@@ -42,6 +42,14 @@ class ZipPath:
     path: str
     subpath: str = ''
 
+    def __str__(self) -> str:
+        """Show a file in a zip as if the zip were a folder, like Windows Explorer does"""
+        if not self.subpath:
+            return self.path
+
+        # Zips separate folders with "/" on every OS
+        return self.path + os.sep + self.subpath.replace('/', os.sep)
+
     @property
     def path_obj(self) -> Path:
         """The path as a Path object"""
