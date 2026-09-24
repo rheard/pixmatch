@@ -62,20 +62,12 @@ def _load_pixmap(path: ZipPath, thumb_size: int) -> QtGui.QPixmap:
 
 
 def movie_sizes(movie: QtGui.QMovie):
-    """Get the max dimensions of a QMovie, and uncompressed file size"""
-    file_size = 0
+    """Get the dimensions of a QMovie, and uncompressed file size"""
+    # Every frame is drawn onto the same canvas, so the first frame has the size of them all. Measuring each frame
+    #   meant decoding the whole animation (twice per hover), which froze the GUI for ~0.4s per 100 800x500 frames
     movie.jumpToFrame(0)
-    rect = QtCore.QRect()
-    for _ in range(movie.frameCount()):
-        movie.jumpToNextFrame()
-        rect |= movie.frameRect()
-
-        img = movie.currentImage()
-        file_size += img.sizeInBytes()
-    width = rect.x() + rect.width()
-    height = rect.y() + rect.height()
-
-    return QtCore.QSize(width, height), file_size
+    first_frame = movie.currentImage()
+    return first_frame.size(), first_frame.sizeInBytes() * max(movie.frameCount(), 1)
 
 
 class ImageViewPane(QtWidgets.QWidget):
