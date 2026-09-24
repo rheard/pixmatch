@@ -949,9 +949,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def change_file_state(self, path: ZipPath, state: SelectionValue):
         """A tile has been clicked and the match state was changed"""
         current_file_state = self.file_states.get(path, SelectionValues.KEEP)
-        if current_file_state not in STATE_ORDER:
-            if _prompt_move_clear(self, current_file_state.state):
-                self.state = state
+        if current_file_state not in STATE_ORDER and not _prompt_move_clear(self, current_file_state.state):
             return
 
         self.set_file_state(path, state)
