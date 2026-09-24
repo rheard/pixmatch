@@ -1137,6 +1137,7 @@ class MainWindow(QtWidgets.QMainWindow):
         file_count_moved = 0
         processed_files = set()
         failed_files = []
+        skipped_files = []
 
         try:
             for file, set_state in to_process.items():
@@ -1147,6 +1148,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 if file.is_zip and set_state.state in {SelectionState.DELETE, SelectionState.MOVE}:
                     # set_file_state never allows this, but acting on file.path_obj would delete or move the WHOLE zip
                     logger.warning("Refusing to %s %s, files in zips are read-only", set_state.state.value, file)
+                    processed_files.add(file)
+                    continue
+
+                if file not in self.processor._reverse_hashes and set_state.state != SelectionState.IGNORE:
+                    # Its folder was removed from the scan after it was marked, so leave the file alone
+                    logger.info("Skipping %s, it is no longer part of the scan", file)
+                    skipped_files.append(file)
                     processed_files.add(file)
                     continue
 
@@ -1226,6 +1234,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if failed_files:
             popup_text += f"Failed to process {len(failed_files)} files (see the log), they are still marked.\n"
+
+        if skipped_files:
+            popup_text += f"Skipped {len(skipped_files)} files which are no longer part of the scan.\n"
 
         if popup_text:
             dlg = QtWidgets.QMessageBox(self)
