@@ -1144,6 +1144,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     processed_files.add(file)
                     continue
 
+                if file.is_zip and set_state.state in {SelectionState.DELETE, SelectionState.MOVE}:
+                    # set_file_state never allows this, but acting on file.path_obj would delete or move the WHOLE zip
+                    logger.warning("Refusing to %s %s, files in zips are read-only", set_state.state.value, file)
+                    processed_files.add(file)
+                    continue
+
                 if set_state.state not in {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE}:
                     raise NotImplementedError(f"Unknown state {set_state.state.value}")
 
