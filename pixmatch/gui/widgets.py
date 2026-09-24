@@ -1,3 +1,5 @@
+import io
+
 from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
@@ -8,6 +10,9 @@ from pathlib import Path
 from typing import Sequence
 from zipfile import BadZipFile, ZipFile
 
+import numpy as np
+
+from PIL import Image
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from pixmatch import ZipPath
@@ -61,16 +66,37 @@ def _load_thumbnail(path: ZipPath, thumb_size: int) -> QtGui.QImage:
     """
     if path.subpath:
         with ZipFile(path.path) as zf:
-            data = zf.read(path.subpath)
-        device = QtCore.QBuffer()
-        device.setData(data)
-        device.open(QtCore.QIODevice.OpenModeFlag.ReadOnly)
-        reader = QtGui.QImageReader(device)
-    else:
-        reader = QtGui.QImageReader(path.path)
+            return _decode_thumbnail(zf.read(path.subpath), thumb_size)
 
+    reader = QtGui.QImageReader(path.path)
     reader.setScaledSize(QtCore.QSize(thumb_size, thumb_size))
     return reader.read()
+
+
+def _decode_thumbnail(data: bytes, thumb_size: int) -> QtGui.QImage:
+    """
+    Decode an image's data (a file in a zip) as a square thumbnail, with Pillow.
+
+    Qt could only read this data through a QBuffer made in Python, and that deadlocked the app: while Qt works out how
+        to read an image it holds a lock and calls the buffer, and PySide needs the GIL for those calls. So a thread
+        loading a thumbnail could hold the lock waiting for the GIL, while the GUI thread held the GIL waiting for the
+        lock to load an image of its own (like the preview of an image being hovered over).
+
+    Returns:
+        QtGui.QImage: The thumbnail, which is null if the image couldn't be read (like QImageReader's).
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.draft("RGB", (thumb_size, thumb_size))  # JPEGs decode at a fraction of their size, as with QImageReader
+            if im.mode.startswith("I;16"):
+                # Pillow clips 16-bit values to 0-255 when converting, which turns nearly everything white
+                im = Image.fromarray((np.asarray(im) >> 8).astype(np.uint8))
+            thumbnail = im.convert("RGBA").resize((thumb_size, thumb_size), Image.Resampling.BILINEAR)
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        return QtGui.QImage()
+
+    # Copied so the QImage has its own pixels, instead of pointing at the bytes (which are about to be freed)
+    return QtGui.QImage(thumbnail.tobytes(), thumb_size, thumb_size, QtGui.QImage.Format.Format_RGBA8888).copy()
 
 
 def movie_sizes(movie: QtGui.QMovie):
