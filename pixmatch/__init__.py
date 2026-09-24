@@ -11,7 +11,7 @@ from multiprocessing import Manager, Pool
 from os import cpu_count
 from pathlib import Path
 from threading import Event
-from typing import ClassVar, Union
+from typing import ClassVar
 from zipfile import BadZipFile, ZipFile
 
 import numpy as np
@@ -43,7 +43,7 @@ class ZipPath:
 
     @property
     def path_obj(self) -> Path:
-        """Get the path as as Path object"""
+        """The path as a Path object"""
         return Path(self.path)
 
     @property
@@ -105,7 +105,7 @@ def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tupl
     if exact_match:
         hasher = hashlib.sha256()
         block_size = 65536
-        with (open(f, "rb") if isinstance(f, (str, Path)) else f) as file:  # noqa: PTH123
+        with (open(f, "rb") if isinstance(f, (str, Path)) else f) as file:  # ruff: ignore[builtin-open]
             for block in iter(lambda: file.read(block_size), b""):
                 hasher.update(block)
         return hasher.hexdigest(), set()
@@ -123,7 +123,7 @@ def calculate_hashes(f, *, is_gif=False, exact_match=False, draft=False) -> tupl
             while phash.is_flat(px):
                 try:
                     im.seek(im.tell() + 1)
-                except EOFError:  # noqa: PERF203
+                except EOFError:  # ruff: ignore[try-except-in-loop]
                     break
                 else:
                     px = phash.grayscale_pixels(im, phash.HASH_IMG_SIZE)
@@ -146,7 +146,7 @@ def thread_error_handler(func):
     """An error handler for the thread to return information about where the error occurred"""
 
     @wraps(func)
-    def wrapper(path, *args, **kwargs):  # noqa: ANN202
+    def wrapper(path, *args, **kwargs):  # ruff: ignore[missing-return-type-private-function]
         try:
             return func(path, *args, **kwargs)
         except Exception as e:
@@ -189,10 +189,10 @@ def _process_image(
                     results[f.filename] = calculate_hashes(zipped_file, is_gif=f_ext in {".gif", ".webp"},
                                                            exact_match=exact_match, draft=draft)
             except BadZipFile as e:
-                logger.warning("Could not read %s in %s due to %s", f.filename, path, str(e))
+                logger.warning("Could not read %s in %s due to %s", f.filename, path, e)
             except UnidentifiedImageError:
                 logger.warning("Could not identify image %s in %s", f.filename, path)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # ruff: ignore[blind-except]
                 # One image that can't be hashed (too large, encrypted, ...) shouldn't lose every other image in the zip
                 logger.warning("Could not process %s in %s due to %s: %s", f.filename, path, type(e).__name__, e)
 
@@ -225,7 +225,7 @@ class Finished:
     """A finished event"""
 
 
-MatcherEvent = Union[NewGroup, NewMatch, Finished]
+MatcherEvent = NewGroup | NewMatch | Finished
 # endregion
 
 
@@ -263,7 +263,7 @@ class HammingIndex:
 
     def add(self, hash_: int):
         """Store a hash"""
-        for (shift, mask, _), table in zip(self._chunks, self._tables):
+        for (shift, mask, _), table in zip(self._chunks, self._tables, strict=True):
             key = hash_ >> shift & mask
             stored = table.get(key)
             if stored is None:
@@ -275,7 +275,7 @@ class HammingIndex:
 
     def remove(self, hash_: int):
         """Remove a stored hash"""
-        for (shift, mask, _), table in zip(self._chunks, self._tables):
+        for (shift, mask, _), table in zip(self._chunks, self._tables, strict=True):
             key = hash_ >> shift & mask
             stored = table[key]
             if stored == hash_:
@@ -289,7 +289,7 @@ class HammingIndex:
     def find(self, hash_: int) -> dict[int, int]:
         """Find the stored hashes within the radius of a hash, as a dict of stored hash -> bits different"""
         found = {}
-        for (shift, mask, flips), table in zip(self._chunks, self._tables):
+        for (shift, mask, flips), table in zip(self._chunks, self._tables, strict=True):
             key = hash_ >> shift & mask
             for flip in flips:
                 stored = table.get(key ^ flip)
@@ -397,7 +397,7 @@ class ImageMatcher:
 
         return _conditional_pause
 
-    def conditional_resume(self, was_paused: bool):  # noqa: FBT001
+    def conditional_resume(self, was_paused: bool):  # ruff: ignore[boolean-type-hint-positional-argument]
         """Resume if not paused previous (from call to `conditional_pause`)"""
         if not was_paused and not self.is_finished():
             logger.debug('Performing conditional resume')
@@ -467,7 +467,6 @@ class ImageMatcher:
             self.remove(path)
         except KeyError:
             logger.info("Failed to remove file %s, probably due to it being deleted already", path)
-            pass
 
         if path.path_obj.suffix.lower() != '.zip':
             self._ignored_files.add(path.path)

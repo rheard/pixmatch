@@ -459,7 +459,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # region File system explorer
         self.file_system_model = DirFileSystemModel()
-        self.change_hidden_folders_state(False)
+        self.change_hidden_folders_state(checked=False)
         self.file_system_model.setRootPath("")
         self.file_system_view = QtWidgets.QTreeView(headerHidden=True)
         self.file_system_view.setContentsMargins(NO_MARGIN)
@@ -642,7 +642,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
-    def change_hidden_folders_state(self, checked: bool):
+    def change_hidden_folders_state(self, checked: bool):  # ruff: ignore[boolean-type-hint-positional-argument]
         """Set the file_system_model filter based on if we should show hidden folders"""
         state = (QtCore.QDir.Filter.Dirs
                  | QtCore.QDir.Filter.Drives
@@ -653,7 +653,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.file_system_model.setFilter(state)
 
-    def change_recycle_state(self, checked: bool):
+    def change_recycle_state(self, checked: bool):  # ruff: ignore[boolean-type-hint-positional-argument]
         """Change the 'Use recycle bin' state"""
         self.recycle = checked
 
@@ -1217,8 +1217,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.file_states = {k: v for k, v in self.file_states.items() if k not in processed_files}
 
             # If total pages has decreased passed the current page, then make sure to set the current page
-            if self.current_page > self.total_pages:
-                self.current_page = self.total_pages
+            self.current_page = min(self.current_page, self.total_pages)
 
             # Update the GUI:
             self.deleted_files_size += file_size_deleted

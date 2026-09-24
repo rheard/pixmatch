@@ -146,7 +146,7 @@ class ImageViewPane(QtWidgets.QWidget):
         self.get_movie.cache_clear()
         self.get_pixmap.cache_clear()
 
-    @lru_cache(maxsize=5)  # noqa: B019
+    @lru_cache(maxsize=5)  # ruff: ignore[cached-instance-method]
     def get_movie(self, path: ZipPath) -> tuple[QtGui.QMovie, int, tuple]:
         """Load a QMovie and details from either a zip or just the file system"""
         file_size = modified = None
@@ -169,7 +169,7 @@ class ImageViewPane(QtWidgets.QWidget):
 
         return movie, file_size, modified
 
-    @lru_cache(maxsize=10)  # noqa: B019
+    @lru_cache(maxsize=10)  # ruff: ignore[cached-instance-method]
     def get_pixmap(self, path: ZipPath) -> tuple[QtGui.QPixmap, int, tuple]:
         """Load a QPixmap and details from either a zip or just the file system"""
         file_size = modified = None
@@ -543,12 +543,12 @@ class ThumbnailTile(QtWidgets.QFrame):
 
     @property
     def path(self) -> ZipPath:
-        """Get the internal file path"""
+        """The internal file path"""
         return self._path
 
     @property
     def state(self) -> SelectionValue:
-        """Get the internal state"""
+        """The internal state"""
         return self._state
 
     @state.setter
