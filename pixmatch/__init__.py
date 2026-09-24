@@ -192,6 +192,9 @@ def _process_image(
                 logger.warning("Could not read %s in %s due to %s", f.filename, path, str(e))
             except UnidentifiedImageError:
                 logger.warning("Could not identify image %s in %s", f.filename, path)
+            except Exception as e:  # noqa: BLE001
+                # One image that can't be hashed (too large, encrypted, ...) shouldn't lose every other image in the zip
+                logger.warning("Could not process %s in %s due to %s: %s", f.filename, path, type(e).__name__, e)
 
     return path, results
 
