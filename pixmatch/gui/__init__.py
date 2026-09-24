@@ -606,6 +606,10 @@ class MainWindow(QtWidgets.QMainWindow):
     @property
     def total_pages(self):
         """How many pages are there in the duplicate group list"""
+        if not self.processor:
+            # Nothing has been scanned yet, so there's only the one empty page
+            return 1
+
         return ceildiv(len(self.processor.matches), self.duplicate_group_list._max_rows) or 1
 
     def on_finish(self):
@@ -948,6 +952,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def change_file_state(self, path: ZipPath, state: SelectionValue):
         """A tile has been clicked and the match state was changed"""
+        if not path:
+            # The Edit menu acts on the image being previewed, and no image has been hovered over yet
+            return
+
         current_file_state = self.file_states.get(path, SelectionValues.KEEP)
         if current_file_state not in STATE_ORDER and not _prompt_move_clear(self, current_file_state.state):
             return
