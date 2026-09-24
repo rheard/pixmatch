@@ -290,11 +290,21 @@ class ScaledLabel(QtWidgets.QLabel):
         """Hijack setPixmap"""
         # TODO: I'm not sure why I added this if statement but I think it can go after self.clear?
         if not pixmap:
-            return None
+            return
 
         self.clear()
         self.orig_pixmap = pixmap
-        return super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.AspectRatioMode.KeepAspectRatio))
+        self._set_scaled_pixmap()
+
+    def _set_scaled_pixmap(self):
+        """Show orig_pixmap scaled to fit the label"""
+        super().setPixmap(self.orig_pixmap.scaled(self.frameSize(), QtCore.Qt.AspectRatioMode.KeepAspectRatio))
+
+    def resizeEvent(self, event):
+        """Rescale the image to fit the new size (movies are scaled as they are painted)"""
+        super().resizeEvent(event)
+        if self.orig_pixmap and not self.movie():
+            self._set_scaled_pixmap()
 
     def setMovie(self, movie):
         """Hijack setMovie"""
@@ -327,12 +337,11 @@ class ScaledLabel(QtWidgets.QLabel):
         self.updateGeometry()
 
     def paintEvent(self, event):
-        """Update things on resize"""
+        """Paint the movie scaled to fit the label (images are scaled when they are set, and on resize)"""
         movie = self.movie()
         if not isinstance(movie, QtGui.QMovie) or not movie.isValid():
+            # Setting the image again here would schedule another paint, repainting (and rescaling) nonstop
             super().paintEvent(event)
-            if self.orig_pixmap:
-                self.setPixmap(self.orig_pixmap)
             return
 
         qp = QtGui.QPainter(self)
