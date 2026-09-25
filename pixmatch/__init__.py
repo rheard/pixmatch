@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from functools import wraps
 from itertools import combinations
 from multiprocessing import Pool
-from os import cpu_count
 from pathlib import Path
 from queue import Queue
 from threading import Event

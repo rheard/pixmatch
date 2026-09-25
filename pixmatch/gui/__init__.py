@@ -2,6 +2,7 @@
 
 
 import logging
+import os
 import shutil
 
 from importlib.metadata import PackageNotFoundError, version
@@ -443,8 +444,32 @@ class MainWindow(QtWidgets.QMainWindow):
         filter_tab.addLayout(filter_tab_main)
         # endregion
 
+        # region Settings tab
+        cpus = os.cpu_count() or 1
+        self._cpu_label = QtWidgets.QLabel()
+        self.cpu_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal,
+                                            tickPosition=QtWidgets.QSlider.TickPosition.TicksBelow)
+        self.cpu_slider.setRange(1, cpus)
+        self.cpu_slider.setPageStep(1)
+        self.cpu_slider.setTickInterval(1)
+        self.cpu_slider.setValue(max(1, cpus))
+        self.cpu_slider.valueChanged.connect(self.on_cpu_adjust)
+        self.on_cpu_adjust(self.cpu_slider.value())
+
+        settings_tab = QtWidgets.QVBoxLayout()
+        settings_tab.addWidget(self._cpu_label)
+        settings_tab.addWidget(self.cpu_slider)
+        settings_tab.addWidget(QtWidgets.QLabel(
+            text="How many of the computer's CPUs a scan uses. Using fewer leaves more of the computer free "
+                 "for other things, but the scan takes longer. This can't be changed while a scan is running.",
+            wordWrap=True,
+        ))
+        settings_tab.addStretch(1)
+        # endregion
+
         such = QtWidgets.QTabWidget()
         such.addTab(QtWidgets.QWidget(layout=filter_tab), "Filter")
+        such.addTab(QtWidgets.QWidget(layout=settings_tab), "Settings")
         # endregion
 
         labels_and_such = QtWidgets.QHBoxLayout()
@@ -543,6 +568,10 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.hash_match_chkbx.setEnabled(True)
 
+    def on_cpu_adjust(self, value: int):
+        """The CPU slider has been adjusted, so show its new value"""
+        self._cpu_label.setText(f"CPUs to use: {value} of {self.cpu_slider.maximum()}")
+
     def on_pause(self, e):
         """Pause button has been pressed, so pause"""
         if not e:
@@ -580,6 +609,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         target_paths = self.file_paths_selected()
 
+        # Each scan makes its own pool of processes when it starts, so this is when a new CPU setting takes effect
+        self.processor.processes = self.cpu_slider.value()
+
         self._thread = ProcessorThread(self.processor, target_paths)
         self._thread.signals.new_group.connect(self.on_new_match_group_found)
         self._thread.signals.new_match.connect(self.on_new_match_found)
@@ -588,6 +620,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pause_btn.setEnabled(True)
         self.precision_slider.setEnabled(False)
         self.hash_match_chkbx.setEnabled(False)
+        self.cpu_slider.setEnabled(False)
         self._run_timer.start()
         self._label_timer.start()
         return
@@ -621,6 +654,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Finish callback, to update GUI when processing has completed"""
         self.stop_btn.setChecked(True)
         self.pause_btn.setEnabled(False)
+        self.cpu_slider.setEnabled(True)
         self._run_timer.stop()
         self._label_timer.stop()
         self._thread = None
