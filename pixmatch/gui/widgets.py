@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from functools import cache
+from itertools import count
 from pathlib import Path
 from typing import Sequence
 from zipfile import BadZipFile, ZipFile
@@ -108,6 +109,35 @@ def _decode_thumbnail(data: bytes, thumb_size: int) -> QtGui.QImage:
     return QtGui.QImage(thumbnail.tobytes(), thumb_size, thumb_size, QtGui.QImage.Format.Format_RGBA8888).copy()
 
 
+def _decode_image(data: bytes) -> QtGui.QImage:
+    """
+    Decode an image's data (a file in a zip) for the preview, with Pillow, off the GUI thread.
+
+    Qt could only read this data through a QBuffer made in Python, which deadlocks off the GUI thread (see
+        _decode_thumbnail), or with QImage.fromData, which holds the GIL until it's done, stalling the GUI meanwhile.
+
+    Returns:
+        QtGui.QImage: The image, which is null if it couldn't be read (like QImageReader's).
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            if im.mode.startswith("I;16"):
+                # Pillow clips 16-bit values to 0-255 when converting, which turns nearly everything white
+                im = Image.fromarray((np.asarray(im) >> 8).astype(np.uint8))
+            # In Qt's own 32-bit formats, so making a QPixmap from it doesn't convert every pixel again
+            if im.mode in {"RGBA", "RGBa", "LA", "La", "PA"} or "transparency" in im.info:
+                im, raw_mode, image_format = im.convert("RGBA"), "BGRA", QtGui.QImage.Format.Format_ARGB32
+            else:
+                im, raw_mode, image_format = im.convert("RGB"), "BGRX", QtGui.QImage.Format.Format_RGB32
+            width, height = im.size
+            pixels = im.tobytes("raw", raw_mode)
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        return QtGui.QImage()
+
+    # Copied so the QImage has its own pixels, instead of pointing at the bytes (which are about to be freed)
+    return QtGui.QImage(pixels, width, height, image_format).copy()
+
+
 def movie_sizes(movie: QtGui.QMovie):
     """Get the dimensions of a QMovie, and uncompressed file size"""
     # Every frame is drawn onto the same canvas, so the first frame has the size of them all. Measuring each frame
@@ -160,6 +190,9 @@ def _read_preview(path: ZipPath) -> _Preview:
     """
     Read an image for the preview, still or animated, with the details about its file.
 
+    This runs on PreviewLoader's threads, so it only reads images with Qt from a path, and with Pillow from data in
+        memory (see _decode_image).
+
     Returns:
         _Preview: The image, or why it couldn't be read.
     """
@@ -173,7 +206,7 @@ def _read_preview(path: ZipPath) -> _Preview:
             if path.is_gif:
                 preview.movie_data = QtCore.QByteArray(data)
             else:
-                preview.image = QtGui.QImage.fromData(data)
+                preview.image = _decode_image(data)
         else:
             file = Path(path.path)
             st = file.stat()
@@ -233,6 +266,100 @@ class PreviewCache:
             self._size -= preview.cost
 
 
+class _PreviewJob(QtCore.QRunnable):
+    """Reads a preview on a PreviewLoader's thread pool"""
+
+    def __init__(self, path: ZipPath, number: int, started: set, read: QtCore.SignalInstance):
+        super().__init__()
+        self.path = path
+        self.number = number  # Which request this is for
+        self.started = started  # The loader's set of the requests that have started being read
+        self.read = read
+
+    def run(self):
+        """Read the preview, and hand it to the GUI thread"""
+        self.started.add(self.number)
+        try:
+            preview = _read_preview(self.path)
+        except Exception as e:  # ruff: ignore[blind-except]
+            # Anything unexpected (like running out of memory) mustn't leave the preview waiting forever
+            preview = _Preview(str(self.path), error=f"{type(e).__name__}: {e}")
+
+        with suppress(RuntimeError):  # The loader was deleted, i.e. the app is closing
+            self.read.emit(self.path, self.number, preview)
+
+
+class PreviewLoader(QtCore.QObject):
+    """
+    Reads previews on a thread pool, and keeps the ones shown most recently (see PreviewCache).
+
+    Reading a preview on the GUI thread froze the app until the image was read and decoded: ~80-160ms for a large photo
+        on a local disk, plus however long reading the file takes from a network drive.
+
+    A preview is read while its file is open, and Windows won't delete or move an open file. So call `wait` first.
+
+    Signals:
+        loaded(path: ZipPath, preview: _Preview): A preview asked for with `request` has been read (or couldn't be).
+    """
+    loaded = QtCore.Signal(ZipPath, object)
+    _read = QtCore.Signal(ZipPath, int, object)  # Emitted on the pool's threads, handled on the GUI's
+
+    def __init__(self, parent=None, *, threads: int = 2):
+        super().__init__(parent)
+        self._pool = QtCore.QThreadPool(self)
+        self._pool.setMaxThreadCount(threads)
+        self._cache = PreviewCache()
+        # Path -> the number of the request whose preview is wanted. A request's preview is dropped if its number isn't
+        #   here when it's read: it was cancelled (see cancel), or its file was deleted or moved (see forget)
+        self._wanted = {}
+        self._started = set()  # The numbers of the requests that have started being read
+        self._numbers = count(1)
+        self._read.connect(self._on_read)
+
+        # The pool waits for every queued preview when it's destroyed, so don't make closing wait for them too
+        app = QtCore.QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.cancel)
+
+    def get(self, path: ZipPath) -> _Preview | None:
+        """Get a preview, if it's kept"""
+        return self._cache.get(path)
+
+    def request(self, path: ZipPath, *, priority: int = 1):
+        """Start reading a preview, unless it's kept or being read already. `loaded` is emitted once it's read"""
+        if path in self._wanted or self._cache.get(path) is not None:
+            return
+
+        number = next(self._numbers)
+        self._wanted[path] = number
+        self._pool.start(_PreviewJob(path, number, self._started, self._read), priority)
+
+    def cancel(self):
+        """Drop the requests that haven't started being read yet, e.g. because what they were for isn't shown anymore"""
+        self._pool.clear()
+        self._wanted = {path: number for path, number in self._wanted.items() if number in self._started}
+
+    def wait(self):
+        """Drop the requests that haven't started being read, and wait for the rest, so none of their files are open"""
+        self.cancel()
+        self._pool.waitForDone()
+
+    def forget(self, path: ZipPath):
+        """Forget a file's preview, and drop any read of it in progress, because the file was deleted or moved"""
+        self._wanted.pop(path, None)
+        self._cache.forget(path)
+
+    def _on_read(self, path: ZipPath, number: int, preview: _Preview):
+        """Keep a preview that was read, and pass it on, if it's still wanted"""
+        self._started.discard(number)
+        if self._wanted.get(path) != number:
+            return
+
+        del self._wanted[path]
+        self._cache.add(path, preview)
+        self.loaded.emit(path, preview)
+
+
 class ImageViewPane(QtWidgets.QWidget):
     """Container with a stacked image viewer and a bottom overlay status label."""
 
@@ -245,7 +372,9 @@ class ImageViewPane(QtWidgets.QWidget):
 
         # --- viewers ---
         self.current_path = None
-        self._previews = PreviewCache()
+        self._shown = False  # Whether current_path's image is shown, or still being read
+        self._previews = PreviewLoader(self)
+        self._previews.loaded.connect(self._on_loaded)
         self.scaled = ScaledLabel(contentsMargins=NO_MARGIN, sizePolicy=MAX_SIZE_POLICY)
         self.scaled.setMinimumSize(10, 10)
 
@@ -300,6 +429,8 @@ class ImageViewPane(QtWidgets.QWidget):
     def clear(self):
         """Clear both views, so no image is shown or current"""
         self.current_path = None
+        self._shown = False
+        self._previews.cancel()  # The previews waiting to be read were for what was shown before
 
         # Unlike ScaledLabel, a plain QLabel leaves its movie playing when cleared
         movie = self.raw_label.movie()
@@ -312,6 +443,14 @@ class ImageViewPane(QtWidgets.QWidget):
         """Forget a file's preview, because the file was deleted or moved"""
         self._previews.forget(path)
 
+    def release_files(self):
+        """
+        Make sure no file is open for a preview: stop the previews waiting to be read, and wait for the ones being read.
+
+        Call this before deleting or moving files: Windows won't delete or move a file that's open.
+        """
+        self._previews.wait()
+
     def set_image(self, path: ZipPath):
         """Set the image to show in the image view area. Can be an animated image."""
         if path == self.current_path:
@@ -321,13 +460,21 @@ class ImageViewPane(QtWidgets.QWidget):
         self.current_path = path
         preview = self._previews.get(path)
         if preview is None:
-            preview = _read_preview(path)
-            self._previews.add(path, preview)
+            # It's shown once it has been read, by _on_loaded
+            self.status.set_elided_text(str(path), " (loading...)")
+            self._previews.request(path)
+            return
 
         self._show(preview)
 
+    def _on_loaded(self, path: ZipPath, preview: _Preview):
+        """A preview has been read, so show it if it's for the image that's current"""
+        if path == self.current_path and not self._shown:
+            self._show(preview)
+
     def _show(self, preview: _Preview):
         """Show the preview of the current image"""
+        self._shown = True
         if preview.error:
             self.status.set_elided_text(preview.path, f" (couldn't be read: {preview.error})")
             return
