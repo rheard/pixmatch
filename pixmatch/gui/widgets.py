@@ -181,13 +181,19 @@ class ImageViewPane(QtWidgets.QWidget):
 
         self.stack.setCurrentIndex(index)
 
-        if self.current_path:
-            self.set_image(self.current_path)
+        # Show the image again, in the view that is shown now. Clearing first takes it out of the other view (where a
+        #   movie would keep playing), and keeps set_image from skipping it as the image that's already shown
+        path = self.current_path
+        self.clear()
+        if path:
+            self.set_image(path)
 
         self.update()
 
     def clear(self):
-        """Clear and reset the current object, and the two sub-objects"""
+        """Clear both views, so no image is shown or current"""
+        self.current_path = None
+
         # Unlike ScaledLabel, a plain QLabel leaves its movie playing when cleared, and so the movie's file open
         movie = self.raw_label.movie()
         self.raw_label.clear()
@@ -248,10 +254,10 @@ class ImageViewPane(QtWidgets.QWidget):
         if path == self.current_path:
             return
 
+        self.clear()
         self.current_path = path
         file_size = modified = None
         extra = ''
-        self.clear()
         if path.is_gif:
             movie, file_size, modified = self.get_movie(path)
             object_size, uncompressed_size = movie_sizes(movie)

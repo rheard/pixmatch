@@ -1000,7 +1000,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def change_file_state(self, path: ZipPath, state: SelectionValue):
         """A tile has been clicked and the match state was changed"""
         if not path:
-            # The Edit menu acts on the image being previewed, and no image has been hovered over yet
+            # The Edit menu acts on the image being previewed, and there isn't one: no image has been hovered over
+            #   since the app started or the preview was last cleared (e.g. by changing page)
             return
 
         current_file_state = self.file_states.get(path, SelectionValues.KEEP)
