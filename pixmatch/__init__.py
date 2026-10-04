@@ -255,6 +255,7 @@ class ImageMatch:
 class NewGroup:
     """A new group event"""
     group: "ImageMatch"
+    seq: int  # The event's number. They're numbered from 1 in the order they're sent, see ImageMatcher.events_sent
 
 
 @dataclass(frozen=True)
@@ -262,6 +263,7 @@ class NewMatch:
     """A new match event"""
     group: "ImageMatch"
     path: ZipPath
+    seq: int  # The event's number, like NewGroup's
 
 
 @dataclass(frozen=True)
@@ -389,6 +391,9 @@ class ImageMatcher:
         # Both ends of these queues are in this process (the pool runs its callbacks on a thread here, not in the
         #   workers), so they don't need to be multiprocessing queues
         self.events = Queue()  # Events to go to higher level users
+        # The seq of the last NewGroup or NewMatch event sent. Data read in a paused() block has the changes of every
+        #   event up to this one, so a user can tell which events (maybe still queued) it has already seen
+        self.events_sent = 0
         self._new_paths = Queue()  # Inbound queue for new paths that are added while processing is running
         self._removed_paths = set()  # Paths that have been removed from processing after processing has been started
         self._ignored_files = set()  # Files which have been ignored and should be skipped from processing if re-ran
@@ -716,12 +721,14 @@ class ImageMatcher:
             self._hashes[hash_].match_i = len(self.matches)
             self.matches.append(self._hashes[hash_])
             self.duplicate_images += 2
-            self.events.put(NewGroup(self._hashes[hash_].snapshot()))
+            self.events_sent += 1
+            self.events.put(NewGroup(self._hashes[hash_].snapshot(), self.events_sent))
             logger.debug('New match group found: %s', self._hashes[hash_].matches)
         else:
             # Just another match for an existing group...
             self.duplicate_images += 1
-            self.events.put(NewMatch(self._hashes[hash_].snapshot(), path))
+            self.events_sent += 1
+            self.events.put(NewMatch(self._hashes[hash_].snapshot(), path, self.events_sent))
             logger.debug('New match found for group #%s: %s',
                          self._hashes[hash_].match_i,
                          self._hashes[hash_].matches)

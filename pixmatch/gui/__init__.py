@@ -13,7 +13,7 @@ from PIL import ImageFile
 from PySide6 import QtCore, QtGui, QtWidgets
 from send2trash import send2trash
 
-from pixmatch import Finished, ImageMatch, ImageMatcher, NewGroup, NewMatch, ZipPath, _is_under
+from pixmatch import Finished, ImageMatcher, NewGroup, NewMatch, ZipPath, _is_under
 from pixmatch.gui.utils import MAX_SIZE_POLICY, NO_MARGIN
 from pixmatch.gui.widgets import (
     STATE_ORDER,
@@ -54,17 +54,17 @@ class WorkerSignals(QtCore.QObject):
     Signals from a running worker thread.
 
     new_group
-        Signaled when a new match group is found.
+        Signaled with the NewGroup event when a new match group is found.
 
     new_match
-        Signaled when a new match is found.
+        Signaled with the NewMatch event when a new match is found.
 
     finish
         Signaled when execution is finished, and was not killed.
     """
 
     new_group = QtCore.Signal(object)
-    new_match = QtCore.Signal(tuple)
+    new_match = QtCore.Signal(object)
     finish = QtCore.Signal()
 
 
@@ -89,9 +89,9 @@ class ProcessorThread(QtCore.QRunnable):
         while not self.processor.events.empty():
             evt = self.processor.events.get_nowait()
             if isinstance(evt, NewGroup):
-                self.signals.new_group.emit(evt.group)
+                self.signals.new_group.emit(evt)
             elif isinstance(evt, NewMatch):
-                self.signals.new_match.emit((evt.group, evt.path))
+                self.signals.new_match.emit(evt)
             elif isinstance(evt, Finished):
                 self._poller.stop()
                 self.signals.finish.emit()
@@ -120,6 +120,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.deleted_files_count = 0
         self.deleted_files_size = 0
         self.current_page: int = 1
+        # The seq of the last event the page already has (see update_group_list). Reset it if the processor is replaced
+        self._page_seq = 0
         self.processor = None
         self.file_states = {}
         self._threadpool = QtCore.QThreadPool()
@@ -663,28 +665,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self._thread = None
         self.update_labels()
 
-    def on_new_match_group_found(self, match_group: ImageMatch):
+    def on_new_match_group_found(self, event: NewGroup):
         """New match group found callback, update the GUI with new match group"""
-        page_this_belongs_on, _ = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
+        page_this_belongs_on, _ = divmod(event.group.match_i, self.duplicate_group_list._max_rows)
         self.duplicate_group_list.update_page_indicator(self.current_page, self.total_pages)
 
-        if self.current_page == page_this_belongs_on + 1:
-            self.duplicate_group_list.add_group(match_group.matches)
+        # If the page was rebuilt after this event was sent, it already has this group
+        if event.seq > self._page_seq and self.current_page == page_this_belongs_on + 1:
+            self.duplicate_group_list.add_group(event.group.matches)
 
         self.set_duplicate_groups_label(len(self.processor.matches))
 
-    def on_new_match_found(self, response):
+    def on_new_match_found(self, event: NewMatch):
         """New match found callback, update the GUI with new match"""
-        # First we must decompose the response
-        #   TODO: Can I just create a callback with 2 args?
-        match_group: ImageMatch
-        new_match: ZipPath
-        match_group, new_match = response
+        page_this_belongs_on, row_this_is = divmod(event.group.match_i, self.duplicate_group_list._max_rows)
 
-        page_this_belongs_on, row_this_is = divmod(match_group.match_i, self.duplicate_group_list._max_rows)
-
-        if self.current_page == page_this_belongs_on + 1:
-            self.duplicate_group_list._rows[row_this_is].add_tile(new_match)
+        # If the page was rebuilt after this event was sent, it already has this image
+        if event.seq > self._page_seq and self.current_page == page_this_belongs_on + 1:
+            self.duplicate_group_list._rows[row_this_is].add_tile(event.path)
 
         self.set_duplicate_images_label(self.processor.duplicate_images)
 
@@ -985,11 +983,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.image_view_area.clear()
 
         row_count = self.duplicate_group_list._max_rows
-        self.duplicate_group_list.set_groups(
-            [m.matches
-             for m in self.processor.matches[(self.current_page - 1) * row_count:self.current_page * row_count]],
-        )
+        page_start = (self.current_page - 1) * row_count
+        with self.processor.paused():
+            # The page is built from the processor's data as it is now, which has the changes of every event sent so
+            #   far. So events that are still queued are skipped when they arrive, by their seq. Later events are
+            #   added to the page, and their groups' numbers (match_i) are current: groups are only renumbered by
+            #   removing files, and that always rebuilds the page after.
+            #   The groups are copied, since they keep changing after this
+            self._page_seq = self.processor.events_sent
+            groups = [list(m.matches) for m in self.processor.matches[page_start:page_start + row_count]]
 
+        self.duplicate_group_list.set_groups(groups)
         self.update_selection_states()
         self.duplicate_group_list.update_page_indicator(self.current_page, self.total_pages)
 
