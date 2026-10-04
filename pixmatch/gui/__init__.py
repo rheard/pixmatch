@@ -1213,61 +1213,64 @@ class MainWindow(QtWidgets.QMainWindow):
         skipped_files = []
 
         try:
-            for file, set_state in to_process.items():
-                if file in processed_files:
-                    continue
+            # One paused() block for every file, so the processor renumbers its groups once, not once per file
+            with self.processor.paused():
+                for file, set_state in to_process.items():
+                    if file in processed_files:
+                        continue
 
-                if set_state.state == SelectionState.KEEP:
-                    processed_files.add(file)
-                    continue
+                    if set_state.state == SelectionState.KEEP:
+                        processed_files.add(file)
+                        continue
 
-                if file.is_zip and set_state.state in {SelectionState.DELETE, SelectionState.MOVE}:
-                    # set_file_state never allows this, but acting on file.path_obj would delete or move the WHOLE zip
-                    logger.warning("Refusing to %s %s, files in zips are read-only", set_state.state.value, file)
-                    processed_files.add(file)
-                    continue
+                    if file.is_zip and set_state.state in {SelectionState.DELETE, SelectionState.MOVE}:
+                        # set_file_state never allows this, but acting on file.path_obj would delete or move the WHOLE
+                        #   zip
+                        logger.warning("Refusing to %s %s, files in zips are read-only", set_state.state.value, file)
+                        processed_files.add(file)
+                        continue
 
-                if file not in self.processor._reverse_hashes and set_state.state != SelectionState.IGNORE:
-                    # Its folder was removed from the scan after it was marked, so leave the file alone
-                    logger.info("Skipping %s, it is no longer part of the scan", file)
-                    skipped_files.append(file)
-                    processed_files.add(file)
-                    continue
+                    if file not in self.processor._reverse_hashes and set_state.state != SelectionState.IGNORE:
+                        # Its folder was removed from the scan after it was marked, so leave the file alone
+                        logger.info("Skipping %s, it is no longer part of the scan", file)
+                        skipped_files.append(file)
+                        processed_files.add(file)
+                        continue
 
-                if set_state.state not in {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE}:
-                    raise NotImplementedError(f"Unknown state {set_state.state.value}")
+                    if set_state.state not in {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE}:
+                        raise NotImplementedError(f"Unknown state {set_state.state.value}")
 
-                try:
-                    if set_state.state == SelectionState.DELETE:
-                        try:
-                            file_size_deleted += self.delete_file(file.path_obj)
-                            file_count_deleted += 1
-                        except FileNotFoundError:
-                            logger.info("File already deleted: %s", file)
+                    try:
+                        if set_state.state == SelectionState.DELETE:
+                            try:
+                                file_size_deleted += self.delete_file(file.path_obj)
+                                file_count_deleted += 1
+                            except FileNotFoundError:
+                                logger.info("File already deleted: %s", file)
 
-                        self.processor.remove(file)
-                    elif set_state.state == SelectionState.IGNORE:
-                        self.processor.ignore(file)
-                        file_count_ignored += 1
-                    else:  # SelectionState.MOVE
-                        destination = self.move_file(file.path_obj, Path(set_state.args[0]))
-
-                        # If this replaced a file that was marked too, that marking doesn't apply to this file
-                        processed_files.add(ZipPath(str(destination)))
-
-                        if any(_is_under(f, destination) for f in self.file_paths_selected()):
-                            self.processor.rename(file, ZipPath(str(destination)))
-                        else:
-                            # This file is no longer in a selected folder! So remove it from the matching
                             self.processor.remove(file)
+                        elif set_state.state == SelectionState.IGNORE:
+                            self.processor.ignore(file)
                             file_count_ignored += 1
-                        file_count_moved += 1
-                except OSError as e:
-                    # e.g. the file is open in another program. Leave it marked so it can be tried again
-                    logger.warning("Failed to %s %s: %s", set_state.state.value, file, e)
-                    failed_files.append(file)
-                else:
-                    processed_files.add(file)
+                        else:  # SelectionState.MOVE
+                            destination = self.move_file(file.path_obj, Path(set_state.args[0]))
+
+                            # If this replaced a file that was marked too, that marking doesn't apply to this file
+                            processed_files.add(ZipPath(str(destination)))
+
+                            if any(_is_under(f, destination) for f in self.file_paths_selected()):
+                                self.processor.rename(file, ZipPath(str(destination)))
+                            else:
+                                # This file is no longer in a selected folder! So remove it from the matching
+                                self.processor.remove(file)
+                                file_count_ignored += 1
+                            file_count_moved += 1
+                    except OSError as e:
+                        # e.g. the file is open in another program. Leave it marked so it can be tried again
+                        logger.warning("Failed to %s %s: %s", set_state.state.value, file, e)
+                        failed_files.append(file)
+                    else:
+                        processed_files.add(file)
         finally:
             # Clear the states which we have processed
             self.file_states = {k: v for k, v in self.file_states.items() if k not in processed_files}

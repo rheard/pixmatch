@@ -3,6 +3,7 @@ import logging
 import os
 import time
 
+from bisect import bisect_left, insort
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -413,6 +414,10 @@ class ImageMatcher:
         # Held while an image is added, and by paused(), so the matcher's data is never changed by two threads at once,
         #   or changed while another thread reads through it
         self._lock = RLock()
+        self._paused_depth = 0  # How many paused() blocks are open. Only changed while holding _lock
+        # The match_i of every group taken out of `matches` in the open paused() block, sorted. The groups after them
+        #   are renumbered when the block ends, see remove
+        self._unmatched = []
 
     @property
     def left_to_process(self):
@@ -460,11 +465,20 @@ class ImageMatcher:
         Pausing on its own only stops images from being added from then on: one that is being added carries on.
             So this also waits for that one, and keeps the data from changing until the `with` block ends.
             Blocks can be nested.
+        Groups that stop being matches (see remove) are taken out of `matches` straight away, but the groups after them
+            are only renumbered once the outermost block ends. So remove many files in one block: renumbering after each
+            one took ~15ms per file with 100k groups after it.
         """
         was_paused = self.conditional_pause()
         try:
             with self._lock:
-                yield
+                self._paused_depth += 1
+                try:
+                    yield
+                finally:
+                    self._paused_depth -= 1
+                    if not self._paused_depth:
+                        self._renumber_matches()
         finally:
             self.conditional_resume(was_paused)
 
@@ -524,8 +538,10 @@ class ImageMatcher:
                 logger.debug('Unmatching match group %s', match_i)
                 self._hashes[hash_].match_i = None
 
-                del self.matches[match_i]
-                self.refresh_match_indexes(match_i)
+                # Groups aren't renumbered until the paused() block ends, so this group's match_i is ahead of its place
+                #   in `matches` by how many groups before it were already taken out in this block
+                del self.matches[match_i - bisect_left(self._unmatched, match_i)]
+                insort(self._unmatched, match_i)
                 self.duplicate_images -= 2
 
             elif not self._hashes[hash_].matches:
@@ -573,6 +589,13 @@ class ImageMatcher:
         """Update the match_i value for all the matches passed a certain point"""
         for match_i, match in enumerate(self.matches[start:], start=start):
             match.match_i = match_i
+
+    def _renumber_matches(self):
+        """Renumber the groups after the first one taken out of `matches` in the paused() block that just ended"""
+        if self._unmatched:
+            # The groups before the first one taken out kept their places, so their numbers are still right
+            self.refresh_match_indexes(self._unmatched[0])
+            self._unmatched.clear()
 
     def _find_group(self, hashes: set) -> int | str | None:
         """
