@@ -115,6 +115,17 @@ def movie_sizes(movie: QtGui.QMovie):
     return first_frame.size(), first_frame.sizeInBytes() * max(movie.frameCount(), 1)
 
 
+def close_movie(movie: QtGui.QMovie):
+    """
+    Stop a movie and close its file.
+
+    A movie keeps its file open to read its frames as it plays, and Windows won't delete or move a file that's open.
+    """
+    movie.device().close()
+    movie.stop()
+    movie.deleteLater()
+
+
 class ImageViewPane(QtWidgets.QWidget):
     """Container with a stacked image viewer and a bottom overlay status label."""
 
@@ -177,7 +188,11 @@ class ImageViewPane(QtWidgets.QWidget):
 
     def clear(self):
         """Clear and reset the current object, and the two sub-objects"""
+        # Unlike ScaledLabel, a plain QLabel leaves its movie playing when cleared, and so the movie's file open
+        movie = self.raw_label.movie()
         self.raw_label.clear()
+        if movie:
+            close_movie(movie)
         self.scaled.clear()
 
         self.get_movie.cache_clear()
@@ -312,9 +327,7 @@ class ScaledLabel(QtWidgets.QLabel):
         super().clear()
         self.orig_pixmap = None
         if self.orig_movie:
-            self.orig_movie.device().close()
-            self.orig_movie.stop()
-            self.orig_movie.deleteLater()
+            close_movie(self.orig_movie)
             self.orig_movie = None
 
     def minimumSizeHint(self):
