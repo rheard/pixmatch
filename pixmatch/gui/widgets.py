@@ -1,4 +1,10 @@
 import io
+import os
+import queue
+import stat
+import sys
+import threading
+import time
 
 from collections import OrderedDict, defaultdict
 from contextlib import ExitStack, nullcontext, suppress
@@ -1114,15 +1120,248 @@ class DuplicateGroupList(QtWidgets.QWidget):
 # endregion
 
 
+class _FolderIconProvider(QtWidgets.QFileIconProvider):
+    """
+    Icons for the folder tree, without working out a type for every file.
+
+    As a folder loads, QFileSystemModel asks for the type of everything in it (like "JPEG image") on the GUI thread,
+        including the files it then hides. That's a MIME lookup per file: System32's ~5000 files froze the GUI for ~1s.
+        The tree doesn't show types, so any type will do.
+    """
+
+    def type(self, info: QtCore.QFileInfo) -> str:
+        """
+        A type that's quick to work out.
+
+        Returns:
+            str: "Folder" or "File". It can't be empty: QFileSystemModel only shows a new entry once its details
+                differ from those of its placeholder, which has no type. So with empty types no folder would show up.
+        """
+        return "Folder" if info.isDir() else "File"
+
+
+def _is_hidden(entry: os.DirEntry) -> bool:
+    """Is this hidden, as QDir decides it? That's the hidden attribute on Windows, and a leading dot elsewhere"""
+    if sys.platform == "win32":
+        return bool(entry.stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN)
+
+    if sys.platform == "darwin" and entry.stat().st_flags & stat.UF_HIDDEN:
+        return True
+
+    return entry.name.startswith(".")
+
+
+def _has_shown_subfolder(path: str, *, include_hidden: bool) -> bool:
+    """
+    Does this folder have a subfolder that the folder tree would show? This stops looking at the first one.
+
+    Shortcuts (.lnk files) don't count. Qt shows shortcuts to folders as folders, but pixmatch can't scan them,
+        and resolving them is slow (seconds for a desktop full of them).
+
+    Returns:
+        bool: Whether it has one. False if the folder can't be read, like QDir.
+    """
+    with suppress(OSError), os.scandir(path) as entries:
+        for entry in entries:
+            with suppress(OSError):
+                if entry.is_dir() and (include_hidden or not _is_hidden(entry)):
+                    return True
+
+    return False
+
+
 class DirFileSystemModel(QtWidgets.QFileSystemModel):
     """
-    Custom FileSystemModel.
+    Custom FileSystemModel, which only shows an expand arrow for folders that have subfolders.
 
-    This is required so that if a directory is opened and it has no children, it still shows as opened...
+    QFileSystemModel gives every folder an arrow, and once a folder with no subfolders is opened it still shows one.
+    The tree asks again about every folder it shows each time it lays itself out, so looking in each folder on the GUI
+        thread froze it in big folders. Instead folders are looked in on worker threads, and get their arrow then.
+    Once Qt has loaded a folder's contents (opening it does that), those are used instead, as Qt keeps them up to date.
+        Qt doesn't watch folders that haven't been opened though, see recheck_children for those.
+
+    Folders are kept track of by their indexes' internalId, which points at Qt's record of the folder: working out a
+        folder's path took most of the time of hasChildren, which is called hundreds of thousands of times while a big
+        folder loads (and finding a folder's index from its path took ~1ms). Qt reuses those ids once a folder is
+        removed, so removed folders are forgotten before then.
+    Folders waiting to be looked in keep their row rather than a QPersistentModelIndex: Qt updates those each time it
+        sorts a folder (which it does as a folder loads), and with thousands of them that froze it for seconds.
     """
 
+    # Folders are looked in on more than one thread, so one that's slow to read (like an offline network drive)
+    #   doesn't hold up the rest
+    CHECK_THREADS = 2
+
+    _checked = QtCore.Signal(list)  # [(id, path, generation, has subfolders)], emitted on the worker threads
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._icon_provider = _FolderIconProvider()  # Kept here, as the model doesn't keep it alive
+        self.setIconProvider(self._icon_provider)
+
+        self._loaded = set()  # Folders whose contents Qt has finished loading
+        self._has_subfolders = {}  # Folders that have been looked in -> whether they have subfolders
+        self._stale = {}  # Answers from before the filter changed, shown until their folders are looked in again
+        self._pending = {}  # Folders waiting to be looked in -> (their path, their folder's id, their row)
+        self._parents = {}  # Folders of folders that have been asked about -> their index (0 is the drives' folder)
+        self._rows = {}  # Folders -> {the id of each folder in it: its row}, when looked up (until rows change)
+        self._generation = 0  # Changes with the filter, so answers found with the old filter are thrown away
+        self._requests = queue.SimpleQueue()  # (id, path, generation, include hidden folders)
+
+        self.directoryLoaded.connect(self._on_directory_loaded)
+        self.rowsAboutToBeRemoved.connect(self._forget_rows)
+        self.modelAboutToBeReset.connect(self._forget_all)
+        for rows_changed in (self.rowsInserted, self.rowsRemoved, self.layoutChanged):
+            rows_changed.connect(self._rows.clear)
+        self._checked.connect(self._on_checked)
+        for _ in range(self.CHECK_THREADS):
+            threading.Thread(target=self._check_folders, daemon=True).start()
+
+    def setFilter(self, filters: QtCore.QDir.Filter):
+        """Set the filter. Whether a folder has subfolders can change with it (hidden ones), so look again"""
+        super().setFilter(filters)
+        self._generation += 1
+        self._stale.update(self._has_subfolders)
+        self._has_subfolders.clear()
+
     def hasChildren(self, /, parent: QtCore.QModelIndex | QtCore.QPersistentModelIndex = ...):
-        """Return true only if there are files as children"""
-        file_info = self.fileInfo(parent)
-        dir_ = QtCore.QDir(file_info.absoluteFilePath())
-        return bool(dir_.entryList(self.filter()))
+        """Return true if the folder has subfolders. Until it has been looked in, return false"""
+        if not parent.isValid() or parent.column() > 0:
+            return super().hasChildren(parent)
+
+        folder = parent.internalId()
+        if folder in self._loaded:
+            return self.rowCount(parent) > 0
+
+        has_subfolders = self._has_subfolders.get(folder)
+        if has_subfolders is None:
+            self._request(parent)
+            return self._stale.get(folder, False)
+
+        return has_subfolders
+
+    def recheck_children(self, parent: QtCore.QModelIndex):
+        """
+        Look again in the folders in a folder, to update their arrows. They keep the arrows they have until then.
+
+        This is for the tree's expanded signal: Qt doesn't watch folders that haven't been opened, so this is how their
+            arrows catch up with subfolders made or deleted outside of the app.
+        """
+        for row in range(self.rowCount(parent)):
+            index = self.index(row, 0, parent)
+            if index.internalId() in self._has_subfolders and index.internalId() not in self._loaded:
+                self._request(index)
+
+    def _request(self, index: QtCore.QModelIndex):
+        """Have a folder looked in, unless it's already waiting to be"""
+        folder = index.internalId()
+        if folder in self._pending:
+            return
+
+        parent = index.parent()
+        parent_id = parent.internalId()  # 0 for the drives, whose folder is the (invalid) root index
+        if parent_id not in self._parents:
+            self._parents[parent_id] = QtCore.QPersistentModelIndex(parent)
+        path = self.filePath(index)
+        self._pending[folder] = (path, parent_id, index.row())
+        self._requests.put((folder, path, self._generation, bool(self.filter() & QtCore.QDir.Filter.Hidden)))
+
+    def _check_folders(self):
+        """Look in folders as they're asked for (on a worker thread), and hand back what was found in batches"""
+        while True:
+            request = self._requests.get()
+            found = []
+            batch_end = time.monotonic() + 0.02  # Up to 20ms of answers go to the GUI thread together
+            while request is not None:
+                folder, path, generation, include_hidden = request
+                found.append((folder, path, generation, _has_shown_subfolder(path, include_hidden=include_hidden)))
+                request = None
+                if time.monotonic() < batch_end:
+                    with suppress(queue.Empty):
+                        request = self._requests.get_nowait()
+
+            with suppress(RuntimeError):  # The model was deleted, i.e. the app is closing
+                self._checked.emit(found)
+
+    def _on_checked(self, found: list):
+        """Keep what the worker threads found, and update the arrows that changed"""
+        changed = defaultdict(list)  # Folders' ids -> the (id, row) of the folders in them to update
+        for folder, path, generation, has_subfolders in found:
+            pending = self._pending.get(folder)
+            if pending is None or pending[0] != path:
+                continue  # The folder was removed while it was looked in (and its id may be another folder's now)
+
+            del self._pending[folder]
+            _, parent_id, row = pending
+            if generation == self._generation:
+                had_subfolders = self._has_subfolders.get(folder, self._stale.pop(folder, False))
+                self._has_subfolders[folder] = has_subfolders
+                if has_subfolders == had_subfolders:
+                    continue
+            # Otherwise the filter changed while it was looked in. Updating it has the tree ask again, which looks again
+
+            changed[parent_id].append((folder, row))
+
+        for parent_id, folders in changed.items():
+            self._update_rows(parent_id, folders)
+
+    def _update_rows(self, parent_id: int, folders: list):
+        """Have the tree ask again whether some folders in a folder have subfolders"""
+        if parent_id and parent_id not in self._loaded:
+            # The tree asks about every row again each time a loading folder gets more, and once it's loaded
+            #   (see _on_directory_loaded). Its rows also move as Qt sorts them, so they couldn't be updated one by one
+            return
+
+        parent = self._parents.get(parent_id)
+        if parent is None or (parent_id and not parent.isValid()):
+            return  # Their folder was removed
+
+        parent = self.index(parent.row(), 0, parent.parent()) if parent_id else QtCore.QModelIndex()
+        for folder, row in folders:
+            index = self.index(row, 0, parent)
+            if index.internalId() != folder:
+                # It moved since it was asked about (like when Qt sorted the folder), so look its row up
+                rows = self._rows.get(parent_id)
+                if rows is None:
+                    rows = {self.index(r, 0, parent).internalId(): r for r in range(self.rowCount(parent))}
+                    self._rows[parent_id] = rows
+                if folder not in rows:
+                    continue
+                index = self.index(rows[folder], 0, parent)
+
+            self.dataChanged.emit(index, index)
+
+    def _on_directory_loaded(self, path: str):
+        """
+        Qt has loaded a folder's contents, so have the tree check the folder's arrow against them.
+
+        The arrows of the folders in it are updated too, for what was found about them while it loaded.
+        """
+        index = self.index(path)
+        if index.isValid():
+            self._loaded.add(index.internalId())
+            self.dataChanged.emit(index, index)
+            rows = self.rowCount(index)
+            if rows:
+                self.dataChanged.emit(self.index(0, 0, index), self.index(rows - 1, 0, index))
+
+    def _forget_rows(self, parent: QtCore.QModelIndex, first: int, last: int):
+        """Forget folders that are about to be removed (and the folders in them), before Qt reuses their ids"""
+        indexes = [self.index(row, 0, parent) for row in range(first, last + 1)]
+        while indexes:
+            index = indexes.pop()
+            folder = index.internalId()
+            self._has_subfolders.pop(folder, None)
+            self._stale.pop(folder, None)
+            self._pending.pop(folder, None)
+            self._parents.pop(folder, None)
+            self._loaded.discard(folder)
+            indexes.extend(self.index(row, 0, index) for row in range(self.rowCount(index)))
+
+    def _forget_all(self):
+        """Forget every folder, as the model is being reset"""
+        self._loaded.clear()
+        self._has_subfolders.clear()
+        self._stale.clear()
+        self._pending.clear()
+        self._parents.clear()

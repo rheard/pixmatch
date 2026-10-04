@@ -491,9 +491,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.file_system_model = DirFileSystemModel()
         self.change_hidden_folders_state(checked=False)
         self.file_system_model.setRootPath("")
-        self.file_system_view = QtWidgets.QTreeView(headerHidden=True)
+        # Every row is the same height, and saying so lets the tree skip measuring each one
+        #   (updating one folder's arrow took ~2ms in a folder of 20,000 folders, and 15us like this)
+        self.file_system_view = QtWidgets.QTreeView(headerHidden=True, uniformRowHeights=True)
         self.file_system_view.setContentsMargins(NO_MARGIN)
         self.file_system_view.setModel(self.file_system_model)
+        self.file_system_view.expanded.connect(self.file_system_model.recheck_children)
         self.file_system_view.setRootIndex(self.file_system_model.index(""))
         self.file_system_view.hideColumn(1)  # Size
         self.file_system_view.hideColumn(2)  # Type
