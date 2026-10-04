@@ -1249,11 +1249,15 @@ class MainWindow(QtWidgets.QMainWindow):
                                 logger.info("File already deleted: %s", file)
 
                             self.processor.remove(file)
+                            self.image_view_area.forget(file)
                         elif set_state.state == SelectionState.IGNORE:
                             self.processor.ignore(file)
                             file_count_ignored += 1
                         else:  # SelectionState.MOVE
                             destination = self.move_file(file.path_obj, Path(set_state.args[0]))
+                            # The file isn't at its old path anymore, and a file it replaced may have a preview kept
+                            self.image_view_area.forget(file)
+                            self.image_view_area.forget(ZipPath(str(destination)))
 
                             # If this replaced a file that was marked too, that marking doesn't apply to this file
                             processed_files.add(ZipPath(str(destination)))

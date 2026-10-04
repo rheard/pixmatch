@@ -11,7 +11,7 @@ from contextlib import ExitStack, nullcontext, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from functools import cache, lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Sequence
 from zipfile import BadZipFile, ZipFile
@@ -26,6 +26,8 @@ from pixmatch.gui.utils import MAX_SIZE_POLICY, NO_MARGIN
 from pixmatch.utils import human_bytes
 
 ZIP_ICON_PATH = Path(__file__).resolve().parent / 'zip.png'
+
+PREVIEW_CACHE_BYTES = 512 * 1024 * 1024  # The most memory the previews kept for showing again can take up
 
 
 class SelectionState(Enum):
@@ -116,14 +118,119 @@ def movie_sizes(movie: QtGui.QMovie):
 
 
 def close_movie(movie: QtGui.QMovie):
-    """
-    Stop a movie and close its file.
-
-    A movie keeps its file open to read its frames as it plays, and Windows won't delete or move a file that's open.
-    """
+    """Stop a movie that's no longer shown, and delete it (with the buffer it plays from) once Qt is done with it"""
     movie.device().close()
     movie.stop()
     movie.deleteLater()
+
+
+@dataclass
+class _Preview:
+    """
+    An image read for the preview, with the details about its file that are shown under it.
+
+    An animation keeps its file's data, and plays from that in memory. Playing it from its file kept the file open (and
+        Windows won't delete or move an open file), and read the file again whenever it was shown.
+    """
+    path: str  # The path to show
+    file_size: int | None = None
+    modified: str | None = None  # As it's shown
+    image: QtGui.QImage | None = None  # A still image as it was read. Only the GUI thread can make it a QPixmap
+    pixmap: QtGui.QPixmap | None = None  # A still image ready to show, see ready
+    movie_data: QtCore.QByteArray | None = None  # An animation's file
+    error: str = ''  # Why it couldn't be read
+
+    @property
+    def cost(self) -> int:
+        """About how much memory this takes up"""
+        if self.pixmap is not None:
+            return self.pixmap.width() * self.pixmap.height() * self.pixmap.depth() // 8
+        if self.movie_data is not None:
+            return self.movie_data.size()
+        return 0
+
+    def ready(self):
+        """Make a still image into a QPixmap to show. This must be done on the GUI thread"""
+        if self.image is not None:
+            self.pixmap = QtGui.QPixmap.fromImage(self.image)
+            self.image = None
+
+
+def _read_preview(path: ZipPath) -> _Preview:
+    """
+    Read an image for the preview, still or animated, with the details about its file.
+
+    Returns:
+        _Preview: The image, or why it couldn't be read.
+    """
+    try:
+        if path.subpath:
+            with ZipFile(path.path) as zf:
+                info = zf.getinfo(path.subpath)
+                data = zf.read(info)
+            year, month, day, *_ = info.date_time
+            preview = _Preview(str(path.absolute()), info.file_size, f"{month}/{day}/{year}")
+            if path.is_gif:
+                preview.movie_data = QtCore.QByteArray(data)
+            else:
+                preview.image = QtGui.QImage.fromData(data)
+        else:
+            file = Path(path.path)
+            st = file.stat()
+            modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime('%m/%d/%Y')
+            preview = _Preview(str(file.absolute()), st.st_size, modified)
+            if path.is_gif:
+                preview.movie_data = QtCore.QByteArray(file.read_bytes())
+            else:
+                preview.image = QtGui.QImageReader(path.path).read()
+    except (OSError, KeyError, BadZipFile) as e:
+        # e.g. a file that was changed or deleted outside of the app
+        return _Preview(str(path), error=str(e))
+
+    return preview
+
+
+class PreviewCache:
+    """
+    The previews shown most recently, so that going back to one shows it straight away.
+
+    Up to `budget` bytes of them are kept: still images are kept decoded, and animations as their file's data.
+
+    Args:
+        budget (int): The most memory the previews can take up, in bytes.
+    """
+
+    def __init__(self, budget: int = PREVIEW_CACHE_BYTES):
+        self._budget = budget
+        self._size = 0
+        self._previews = OrderedDict()  # ZipPath -> _Preview, least recently used first
+
+    def get(self, path: ZipPath) -> _Preview | None:
+        """Get a preview, if it's kept"""
+        preview = self._previews.get(path)
+        if preview is not None:
+            self._previews.move_to_end(path)
+        return preview
+
+    def add(self, path: ZipPath, preview: _Preview):
+        """Make a preview that was just read ready to show, and keep it (unless it couldn't be read or is too big)"""
+        preview.ready()
+        if preview.error or (preview.pixmap is not None and preview.pixmap.isNull()) or preview.cost > self._budget:
+            # Images that couldn't be read aren't kept, so they're tried again the next time they're shown
+            return
+
+        self.forget(path)
+        self._previews[path] = preview
+        self._size += preview.cost
+        while self._size > self._budget:
+            _, oldest = self._previews.popitem(last=False)
+            self._size -= oldest.cost
+
+    def forget(self, path: ZipPath):
+        """Forget a preview, e.g. because its file was deleted or moved"""
+        preview = self._previews.pop(path, None)
+        if preview is not None:
+            self._size -= preview.cost
 
 
 class ImageViewPane(QtWidgets.QWidget):
@@ -138,7 +245,7 @@ class ImageViewPane(QtWidgets.QWidget):
 
         # --- viewers ---
         self.current_path = None
-        self._buffer = self._qbytearray = None
+        self._previews = PreviewCache()
         self.scaled = ScaledLabel(contentsMargins=NO_MARGIN, sizePolicy=MAX_SIZE_POLICY)
         self.scaled.setMinimumSize(10, 10)
 
@@ -194,60 +301,16 @@ class ImageViewPane(QtWidgets.QWidget):
         """Clear both views, so no image is shown or current"""
         self.current_path = None
 
-        # Unlike ScaledLabel, a plain QLabel leaves its movie playing when cleared, and so the movie's file open
+        # Unlike ScaledLabel, a plain QLabel leaves its movie playing when cleared
         movie = self.raw_label.movie()
         self.raw_label.clear()
         if movie:
             close_movie(movie)
         self.scaled.clear()
 
-        self.get_movie.cache_clear()
-        self.get_pixmap.cache_clear()
-
-    @lru_cache(maxsize=5)  # ruff: ignore[cached-instance-method]
-    def get_movie(self, path: ZipPath) -> tuple[QtGui.QMovie, int, tuple]:
-        """Load a QMovie and details from either a zip or just the file system"""
-        file_size = modified = None
-        # We're setting a movie...
-        if path.subpath:
-            # Need to load movie from a zipfile
-            with ZipFile(path.path) as zf:
-                st = zf.getinfo(path.subpath)
-                modified = st.date_time
-                file_size = st.file_size
-                self._qbytearray = QtCore.QByteArray(zf.read(path.subpath))
-                self._buffer = QtCore.QBuffer(self._qbytearray)
-                self._buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly)
-
-                movie = QtGui.QMovie()
-                movie.setDevice(self._buffer)
-        else:
-            # Basic movie path
-            movie = QtGui.QMovie(str(path.path))
-
-        return movie, file_size, modified
-
-    @lru_cache(maxsize=10)  # ruff: ignore[cached-instance-method]
-    def get_pixmap(self, path: ZipPath) -> tuple[QtGui.QPixmap, int, tuple]:
-        """Load a QPixmap and details from either a zip or just the file system"""
-        file_size = modified = None
-        # We're setting an image...
-        if path.subpath:
-            # Need to load image from a zipfile
-            try:
-                with ZipFile(path.path) as zf:
-                    st = zf.getinfo(path.subpath)
-                    modified = st.date_time
-                    file_size = st.file_size
-                    pixmap = QtGui.QPixmap()
-                    pixmap.loadFromData(zf.read(path.subpath))
-            except KeyError:
-                return QtGui.QPixmap(), 0, ()
-        else:
-            # Basic image path
-            pixmap = QtGui.QPixmap(str(path.path))
-
-        return pixmap, file_size, modified
+    def forget(self, path: ZipPath):
+        """Forget a file's preview, because the file was deleted or moved"""
+        self._previews.forget(path)
 
     def set_image(self, path: ZipPath):
         """Set the image to show in the image view area. Can be an animated image."""
@@ -256,16 +319,33 @@ class ImageViewPane(QtWidgets.QWidget):
 
         self.clear()
         self.current_path = path
-        file_size = modified = None
-        extra = ''
-        if path.is_gif:
-            movie, file_size, modified = self.get_movie(path)
-            object_size, uncompressed_size = movie_sizes(movie)
+        preview = self._previews.get(path)
+        if preview is None:
+            preview = _read_preview(path)
+            self._previews.add(path, preview)
 
-            if self.stack.currentIndex() == 0:
-                self.scaled.setMovie(movie)
-            else:
-                self.raw_label.setMovie(movie)
+        self._show(preview)
+
+    def _show(self, preview: _Preview):
+        """Show the preview of the current image"""
+        if preview.error:
+            self.status.set_elided_text(preview.path, f" (couldn't be read: {preview.error})")
+            return
+
+        extra = ''
+        if preview.movie_data is not None:
+            label = self.scaled if self.stack.currentIndex() == 0 else self.raw_label
+            # The movie belongs to the label that shows it, and its buffer belongs to the movie, so that neither one can
+            #   be deleted while something still uses it. A buffer kept by Python could be deleted before its movie
+            #   (e.g. as the app closed), and the movie crashed the app reading its next frame from it.
+            #   setData shares the file's data with the preview (QByteArrays copy by sharing), rather than copying it
+            movie = QtGui.QMovie(label)
+            buffer = QtCore.QBuffer(movie)
+            buffer.setData(preview.movie_data)
+            buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly)
+            movie.setDevice(buffer)
+            object_size, uncompressed_size = movie_sizes(movie)
+            label.setMovie(movie)
 
             # WEBP files which aren't animated will appear as movies with a single frame
             #   Thats boring. For the purposes of the statusbar, just treat them as images
@@ -279,7 +359,7 @@ class ImageViewPane(QtWidgets.QWidget):
             movie.start()
         else:
             # Not an animated image, just a normal boring pixmap
-            pixmap, file_size, modified = self.get_pixmap(path)
+            pixmap = preview.pixmap
             extra = f'({human_bytes(pixmap.toImage().sizeInBytes())}) '
             object_size = pixmap.size()
 
@@ -293,24 +373,14 @@ class ImageViewPane(QtWidgets.QWidget):
 
         self.update()
 
-        # region Update status text
-        if not path.subpath:
-            path = Path(path.path)
-            st = path.stat()
-            modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime('%m/%d/%Y')
-            file_size = st.st_size
-        elif modified:
-            modified = f"{modified[1]}/{modified[2]}/{modified[0]}"
-
         # If it doesn't fit, shorten the path rather than the details that are for comparing duplicates
         self.status.set_elided_text(
-            str(path.absolute()),
-            f" ({human_bytes(file_size)} {extra}"
+            preview.path,
+            f" ({human_bytes(preview.file_size)} {extra}"
             f"- {object_size.width()},{object_size.height()}px "
-            f"- {modified}"
+            f"- {preview.modified}"
             f")",
         )
-        # endregion
 
 
 class ScaledLabel(QtWidgets.QLabel):
@@ -329,7 +399,7 @@ class ScaledLabel(QtWidgets.QLabel):
         self.orig_movie = self.movie()
 
     def clear(self):
-        """Clear the label, make sure no files are left open"""
+        """Clear the label, and stop its movie"""
         super().clear()
         self.orig_pixmap = None
         if self.orig_movie:
