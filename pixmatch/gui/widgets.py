@@ -823,6 +823,11 @@ class ThumbnailLoader(QtCore.QObject):
         self._pool.clear()
         self._pending.clear()
 
+    def wait(self):
+        """Stop loading thumbnails that haven't started, and wait for the rest, so none of their files are open"""
+        self.cancel()
+        self._pool.waitForDone()
+
     def _start_zip_jobs(self):
         """
         Start loading the images in zips that were asked for.
@@ -1353,6 +1358,14 @@ class DuplicateGroupList(QtWidgets.QWidget):
             row.setParent(None)
             row.deleteLater()
         self._rows.clear()
+
+    def release_files(self):
+        """
+        Make sure no file is open for a thumbnail: stop the thumbnails waiting to load, and wait for the ones loading.
+
+        Call this before deleting or moving files: Windows won't delete or move a file that's open.
+        """
+        self._thumbnails.wait()
 # endregion
 
 

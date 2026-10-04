@@ -1199,8 +1199,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         is_paused = self.processor.conditional_pause()
         self.image_view_area.clear()
-        # Previews are read in the background with their files open, and Windows won't delete or move an open file
+        # Previews and thumbnails are read in the background with their files open, and Windows won't delete or move an
+        #   open file
         self.image_view_area.release_files()
+        self.duplicate_group_list.release_files()
 
         states = set(states or {SelectionState.DELETE, SelectionState.IGNORE, SelectionState.MOVE})
         states.add(SelectionState.KEEP)
