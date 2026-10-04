@@ -29,6 +29,7 @@ from pixmatch.utils import human_bytes
 ZIP_ICON_PATH = Path(__file__).resolve().parent / 'zip.png'
 
 PREVIEW_CACHE_BYTES = 512 * 1024 * 1024  # The most memory the previews kept for showing again can take up
+PREFETCH_LIMIT = 8  # The most images of a hovered tile's group whose previews are read ahead of being hovered
 
 
 class SelectionState(Enum):
@@ -450,6 +451,11 @@ class ImageViewPane(QtWidgets.QWidget):
         Call this before deleting or moving files: Windows won't delete or move a file that's open.
         """
         self._previews.wait()
+
+    def prefetch(self, paths: Sequence[ZipPath]):
+        """Start reading previews that are likely to be shown next, after the current image's (if it's being read)"""
+        for path in paths[:PREFETCH_LIMIT]:
+            self._previews.request(path, priority=0)
 
     def set_image(self, path: ZipPath):
         """Set the image to show in the image view area. Can be an animated image."""
@@ -1366,6 +1372,23 @@ class DuplicateGroupList(QtWidgets.QWidget):
         Call this before deleting or moving files: Windows won't delete or move a file that's open.
         """
         self._thumbnails.wait()
+
+    def group_around(self, path: ZipPath) -> list[ZipPath]:
+        """
+        The other images in the row (group) that has `path`, nearest to it first.
+
+        Returns:
+            list[ZipPath]: The images, or an empty list if `path` isn't on this page.
+        """
+        for row in self._rows:
+            paths = [tile.path for tile in row.tiles()]
+            if path in paths:
+                i = paths.index(path)
+                # By distance, and the one to the right first when two are as near
+                nearest = sorted(range(len(paths)), key=lambda j: (abs(j - i), j < i))
+                return [paths[j] for j in nearest if j != i]
+
+        return []
 # endregion
 
 

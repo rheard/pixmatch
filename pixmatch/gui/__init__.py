@@ -1014,6 +1014,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_tile_hover(self, path: ZipPath):
         """A tile has been hovered over, so handle that logic"""
         self.image_view_area.set_image(path)
+        # Its duplicates are what's most likely to be looked at next, so read them in the background too
+        self.image_view_area.prefetch(self.duplicate_group_list.group_around(path))
         self.mark_delete_menu.setEnabled(not path.is_zip)
         self.mark_delete_group_menu.setEnabled(not path.is_zip)
         self.mark_delete_folder_menu.setEnabled(not path.is_zip)
