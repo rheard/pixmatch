@@ -877,19 +877,18 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Mark several files as a particular state, then update the tiles.
 
-        Processing is paused before `paths` is iterated, so it can be a generator over the processor's data.
+        Processing is paused while `paths` is iterated, so it can be one of the processor's lists. A generator over the
+            processor's data must be made inside a `with self.processor.paused():` block too, since a generator
+            expression takes its iterator over that data as soon as it's made (and it could change before the pause).
         """
         if not self.processor:
             return
 
-        currently_paused = self.processor.conditional_pause()
-        try:
+        with self.processor.paused():
             for path in paths:
                 self.set_file_state(path, state)
 
             self.update_selection_states()
-        finally:
-            self.processor.conditional_resume(currently_paused)
 
     def mark_group(self, path, selection: SelectionValue):
         """Mark all files in a group with path as a particular state"""
@@ -964,7 +963,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path.is_dir():
             path = path.parent
 
-        self.mark_paths((p for p in self.processor._reverse_hashes if p.path_obj.parent == path), selection)
+        # Paused before the generator is made, since it takes its iterator over the processor's data straight away
+        with self.processor.paused():
+            self.mark_paths((p for p in self.processor._reverse_hashes if p.path_obj.parent == path), selection)
 
     def mark_ignore_folder(self, target_path: ZipPath | None = None):
         """Mark all files in a folder as ignore"""

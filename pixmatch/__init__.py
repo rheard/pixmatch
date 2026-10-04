@@ -4,13 +4,14 @@ import os
 import time
 
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import wraps
 from itertools import combinations
 from multiprocessing import Pool
 from pathlib import Path
 from queue import Queue
-from threading import Event
+from threading import Event, RLock
 from typing import ClassVar
 from zipfile import BadZipFile, ZipFile
 
@@ -355,6 +356,9 @@ class ImageMatcher:
     Images are hashed in other processes, which use this process's setting for PIL.ImageFile.LOAD_TRUNCATED_IMAGES.
         So set that to True to hash damaged images too (the app does), rather than skipping them.
 
+    While `run` is running, images are added on another thread. To change the matcher's data or read through it
+        (like `matches`) from any other thread meanwhile, do it in a `with matcher.paused():` block.
+
     Args:
         strength (int): The 0-10 strength to use for matching. Defaults to 5.
             STRENGTH_RADIUS has how many bits two images' hashes can differ by at each strength.
@@ -401,6 +405,10 @@ class ImageMatcher:
         self._finished = Event()
         self._finished.set()
 
+        # Held while an image is added, and by paused(), so the matcher's data is never changed by two threads at once,
+        #   or changed while another thread reads through it
+        self._lock = RLock()
+
     @property
     def left_to_process(self):
         """Files that are left to process"""
@@ -420,20 +428,40 @@ class ImageMatcher:
         # TODO: This works but the biggest problem with it is that it will not remove any images which are still
         #   queue'd up for processing in the ThreadPool... I'm not sure how to fix that yet.
         folder = str(Path(folder).expanduser().resolve())
-        paused = self.conditional_pause()
-        self._removed_paths.add(folder)
+        with self.paused():
+            self._removed_paths.add(folder)
 
-        # Remove anything we've already seen under that folder
-        # (iterate over a copy because remove() mutates structures)
-        to_remove = [p for p in self._reverse_hashes if _is_under(folder, p.path)]
-        for p in to_remove:
-            self.remove(p)
+            # Remove anything we've already seen under that folder
+            # (iterate over a copy because remove() mutates structures)
+            to_remove = [p for p in self._reverse_hashes if _is_under(folder, p.path)]
+            for p in to_remove:
+                self.remove(p)
 
-        to_remove_zips = [p for p in self._processed_zips if _is_under(folder, p)]
-        for p in to_remove_zips:
-            self._processed_zips.pop(p)
+            to_remove_zips = [p for p in self._processed_zips if _is_under(folder, p)]
+            for p in to_remove_zips:
+                self._processed_zips.pop(p)
 
-        self.conditional_resume(paused)
+    def _is_removed(self, path: str | Path) -> bool:
+        """Is this file or folder in a folder that was removed from processing (see remove_path)?"""
+        # Copied first: another thread can add or remove a folder at any time, and a set that changes while it's being
+        #   iterated raises
+        return any(_is_under(folder, path) for folder in tuple(self._removed_paths))
+
+    @contextmanager
+    def paused(self):
+        """
+        Pause processing while the matcher's data is changed or read through, then resume (if it wasn't paused before).
+
+        Pausing on its own only stops images from being added from then on: one that is being added carries on.
+            So this also waits for that one, and keeps the data from changing until the `with` block ends.
+            Blocks can be nested.
+        """
+        was_paused = self.conditional_pause()
+        try:
+            with self._lock:
+                yield
+        finally:
+            self.conditional_resume(was_paused)
 
     def conditional_pause(self) -> bool:
         """Pause if not paused and return if was paused"""
@@ -483,32 +511,30 @@ class ImageMatcher:
         """Remove a loaded path completely from the image matching system. Will not delete a file."""
         # Pause things while we remove things...
         logger.info('Removing %s from %s', path, self.__class__.__name__)
-        paused = self.conditional_pause()
+        with self.paused():
+            hash_ = self._reverse_hashes.pop(path)
+            self._hashes[hash_].matches.remove(path)
+            if len(self._hashes[hash_].matches) == 1:
+                match_i = self._hashes[hash_].match_i
+                logger.debug('Unmatching match group %s', match_i)
+                self._hashes[hash_].match_i = None
 
-        hash_ = self._reverse_hashes.pop(path)
-        self._hashes[hash_].matches.remove(path)
-        if len(self._hashes[hash_].matches) == 1:
-            match_i = self._hashes[hash_].match_i
-            logger.debug('Unmatching match group %s', match_i)
-            self._hashes[hash_].match_i = None
+                del self.matches[match_i]
+                self.refresh_match_indexes(match_i)
+                self.duplicate_images -= 2
 
-            del self.matches[match_i]
-            self.refresh_match_indexes(match_i)
-            self.duplicate_images -= 2
+            elif not self._hashes[hash_].matches:
+                logger.debug('Removing empty match group')
+                del self._hashes[hash_]
+                if self._index is not None:
+                    self._index.remove(hash_)
 
-        elif not self._hashes[hash_].matches:
-            logger.debug('Removing empty match group')
-            del self._hashes[hash_]
-            if self._index is not None:
-                self._index.remove(hash_)
+            else:
+                logger.debug('Simple removal performed')
+                self.duplicate_images -= 1
 
-        else:
-            logger.debug('Simple removal performed')
-            self.duplicate_images -= 1
-
-        self.processed_images -= 1
-        self.found_images -= 1
-        self.conditional_resume(paused)
+            self.processed_images -= 1
+            self.found_images -= 1
 
     def ignore(self, path):
         """Remove a path from the image matching service"""
@@ -526,8 +552,7 @@ class ImageMatcher:
             return
 
         logger.info('Renaming %s to %s in %s', old_path, new_path, self.__class__.__name__)
-        paused = self.conditional_pause()
-        try:
+        with self.paused():
             if new_path in self._reverse_hashes:
                 # The file that was at new_path has been replaced by this one
                 self.remove(new_path)
@@ -538,8 +563,6 @@ class ImageMatcher:
             # Replace it in place, so the file keeps its position (column) in its group
             matches = self._hashes[hash_].matches
             matches[matches.index(old_path)] = new_path
-        finally:
-            self.conditional_resume(paused)
 
     def refresh_match_indexes(self, start=0):
         """Update the match_i value for all the matches passed a certain point"""
@@ -586,25 +609,66 @@ class ImageMatcher:
         # TODO: This callback must return IMMEDIATELY and is currently too slow for large amounts of zips.
         #   Perhaps create a new queue/thread and queue up processing for zip results?
         #   I think the major slow point is adding to the data structures and I'm not sure if more threads will help
-        # Check for paused or finished signals
-        self._not_paused.wait()
-        if self.is_finished():
+        if isinstance(result[1], dict):
+            try:
+                self._add_zip_result(result)
+            except Exception:
+                logger.exception("Could not add the images in %s", result[0])
+                with self._lock:
+                    self.processed_images += 1  # Counted like a zip that couldn't be read
             return
 
-        try:
-            processed = self._add_result(result)
-        except Exception:
-            logger.exception("Could not add %s", result[0])
-            processed = True
+        # Check for paused or finished signals
+        self._not_paused.wait()
+        with self._lock:  # Whatever paused to change or read the data (see paused) holds this until it's done
+            if self.is_finished():
+                return
 
-        if processed:
-            self.processed_images += 1
-        else:
+            try:
+                processed = self._add_result(result)
+            except Exception:
+                logger.exception("Could not add %s", result[0])
+                processed = True
+
+            if processed:
+                self.processed_images += 1
+            else:
+                self.found_images -= 1
+
+    def _add_zip_result(self, result):
+        """
+        Add the images that were hashed in a zip, by passing each one to _process_image_callback on its own.
+
+        That waits for any pause to end before each image, so the lock is only held for one image at a time.
+            Holding it for the whole zip would leave whatever paused waiting for the lock, while this waits for the
+            pause to end.
+        The zip stays counted as a file left to process until all of its images are added and counted,
+            so the scan can't finish partway through it.
+        """
+        path, hashes = result
+        with self._lock:
+            if self.is_finished():
+                return
+
+            if self._is_removed(path):
+                # This zip was removed AFTER it was queue'd! So just leave...
+                self.found_images -= 1
+                return
+
+        subpaths = []
+        for sub_path, sub_hashes in hashes.items():
+            with self._lock:
+                self.found_images += 1
+            subpaths.append(ZipPath(str(path), sub_path))
+            self._process_image_callback((subpaths[-1], sub_hashes))
+
+        with self._lock:
+            self._processed_zips[str(path)] = subpaths
             self.found_images -= 1
 
     def _add_result(self, result) -> bool:
         """
-        Add the result of hashing an image to the matching.
+        Add the result of hashing an image (not a zip) to the matching. The lock must be held.
 
         This needs to do quite a few things including sanitizing the results,
             actually checking if the hash matches an existing image,
@@ -612,24 +676,14 @@ class ImageMatcher:
             and verify that this result wasn't added as a removed path since it was queued.
 
         Returns:
-            bool: Whether the image was processed. False if it was skipped, so it isn't part of the scan after all,
-                and for a zip, whose images are each handled (and counted) on their own.
+            bool: Whether the image was processed. False if it was skipped, so it isn't part of the scan after all.
         """
         # region Sanitize results
         path: Path | str | ZipPath
         path, hashes = result
 
-        if any(_is_under(d, path.path if isinstance(path, ZipPath) else path) for d in self._removed_paths):
+        if self._is_removed(path.path if isinstance(path, ZipPath) else path):
             # This image was removed AFTER it was queue'd! So just leave...
-            return False
-
-        if isinstance(hashes, dict):
-            subpaths = []
-            for sub_path, sub_hashes in hashes.items():
-                self.found_images += 1
-                subpaths.append(ZipPath(str(path), sub_path))
-                self._process_image_callback((subpaths[-1], sub_hashes))
-            self._processed_zips[str(path)] = subpaths
             return False
 
         initial_hash, extra_hashes = hashes
@@ -676,7 +730,8 @@ class ImageMatcher:
 
     def _process_image_error_callback(self, e):
         """Log an image that couldn't be hashed, and count it as processed"""
-        self.processed_images += 1
+        with self._lock:
+            self.processed_images += 1
         # Errors from _process_image say which file they were for, but errors from the pool itself (like a result that
         #   couldn't be sent back) don't. And like _process_image_callback, this must not raise
         logger.error("%s: %s (input path %s)", type(e).__name__, e, getattr(e, "input_path", "unknown"))
@@ -718,7 +773,7 @@ class ImageMatcher:
                     dirs.sort()  # This actually works to ensure that os.walk goes in alphabetical order!
                     root = Path(root)
 
-                    if any(_is_under(d, root) for d in self._removed_paths):
+                    if self._is_removed(root):
                         continue
 
                     for f in files:
@@ -731,7 +786,7 @@ class ImageMatcher:
                         if f.suffix.lower() not in self.extensions:
                             continue
 
-                        if any(_is_under(d, f) for d in self._removed_paths):
+                        if self._is_removed(f):
                             continue
 
                         if str(f) in self._ignored_files:
@@ -743,7 +798,8 @@ class ImageMatcher:
                         elif ZipPath(str(f), "") in self._reverse_hashes:
                             continue
 
-                        self.found_images += 1
+                        with self._lock:  # The result thread changes this count too
+                            self.found_images += 1
                         tp.apply_async(
                             _process_image,
                             args=(f, ),
