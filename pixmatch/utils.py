@@ -25,14 +25,15 @@ def human_bytes(
     if n < 0:
         raise ValueError("Byte size cannot be negative")
 
+    units = tuple(units)  # Read just once, so any iterable works (a generator can only be read once)
     i = 0
-    max_i = len(tuple(units)) - 1
+    max_i = len(units) - 1
     while n >= base and i < max_i:
         n /= base
         i += 1
 
     if i == 0 or decimals == 0:
         # Bytes or integer formatting requested
-        return f"{int(n)}{tuple(units)[i]}"
+        return f"{int(n)}{units[i]}"
 
-    return f"{f'{n:.{decimals}f}'.rstrip('0').rstrip('.')}{tuple(units)[i]}"
+    return f"{f'{n:.{decimals}f}'.rstrip('0').rstrip('.')}{units[i]}"
