@@ -920,7 +920,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mark_column(target_path, SelectionValues.DELETE)
 
     def mark_unmark_column(self, target_path: ZipPath):
-        """Mark all files in a column as delete"""
+        """Mark all files in a column as keep"""
         self.mark_column(target_path, SelectionValues.KEEP)
 
     def mark_zip(self, target_path: ZipPath, state: SelectionValue):
@@ -936,7 +936,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mark_zip(current_zip_path, SelectionValues.IGNORE)
 
     def mark_unmark_zip(self, target_path: ZipPath | None = None):
-        """Mark all files in a zip as ignore"""
+        """Mark all files in a zip as keep"""
         current_zip_path = target_path or self.image_view_area.current_path
         self.mark_zip(current_zip_path, SelectionValues.KEEP)
 
@@ -1108,7 +1108,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.selected_file_path_display.setCurrentIndex(self.selected_file_path_display.indexFromItem(item))
 
     def file_path_down_clicked(self, _):
-        """Move the selected directory up in the ordering"""
+        """Move the selected directory down in the ordering"""
         # TODO: If the path has already been loaded for processing in the processor, then this won't do much
         for selected_index in self.selected_file_path_display.selectedIndexes():
             row = selected_index.row()

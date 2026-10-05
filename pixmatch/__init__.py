@@ -72,7 +72,7 @@ class ZipPath:
 
 
 def _is_under(folder_abs: str, target: str | Path) -> bool:
-    """Return True if the ZipPath's real file (zp.path) is inside folder_abs."""
+    """Is target (a file or folder) inside the folder folder_abs, or that folder itself? Links in both are followed"""
     try:
         Path(target).expanduser().resolve().relative_to(Path(folder_abs).expanduser().resolve())
     except ValueError:
