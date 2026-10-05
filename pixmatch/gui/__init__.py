@@ -1121,8 +1121,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def file_path_out_clicked(self, _):
         """Move the selected directory out of processing"""
-        # TODO: If the path has already been loaded for processing in the processor then all of the images
-        #   will still need to be hashed before the callback will discard the results...
         for selected_index in self.selected_file_path_display.selectedIndexes():
             selected_item = self.selected_file_path_display.takeItem(selected_index.row())
 

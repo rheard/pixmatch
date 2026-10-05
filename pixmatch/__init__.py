@@ -4,15 +4,15 @@ import os
 import time
 
 from bisect import bisect_left, insort
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import wraps
+from functools import partial, wraps
 from itertools import combinations
 from multiprocessing import Pool
 from pathlib import Path
 from queue import Queue
-from threading import Event, RLock
+from threading import Event, RLock, Semaphore
 from typing import ClassVar
 from zipfile import BadZipFile, ZipFile
 
@@ -91,6 +91,12 @@ STRENGTH_RADIUS = (8, 8, 8, 6, 6, 4, 4, 2, 2, 0, 0)
 # Decoding JPEGs at a reduced size (see calculate_hashes' draft) can move a hash by up to 2 bits. That is harmless
 #   when matches can differ by at least this many bits, but loses matches at stricter strengths.
 DRAFT_RADIUS = 4
+
+# The most files handed to the pool at once for each of its processes, counting the ones whose results are waiting to be
+#   added. That's plenty to keep every process busy. The walk finds files far faster than they can be hashed, and
+#   handing each one over as soon as it was found took ~2.8KB per file until it was hashed (~2.7GB for a million).
+#   The files waiting their turn are kept as just their paths instead, which took ~250 bytes per file
+TASKS_PER_PROCESS = 8
 
 # Formats whose extra frames are an animation. Other formats can have more than one frame too, but their first frame is
 #   the image: like a TIFF's other pages, or the preview that many cameras add to their JPEGs (which open as MPO)
@@ -367,7 +373,7 @@ class ImageMatcher:
             STRENGTH_RADIUS has how many bits two images' hashes can differ by at each strength.
         exact_match (bool): Should use SHA-256 hashes? If False, the default, will use perceptual hashes.
             If True, strength must be 10.
-        processes (int): The number of processes to use. Defaults to None.
+        processes (int): The number of processes to use. Defaults to None, for one per CPU.
         extensions (set): The extensions to process. Optional.
     """
     SUPPORTED_EXTS: ClassVar = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
@@ -419,6 +425,9 @@ class ImageMatcher:
         #   are renumbered when the block ends, see remove
         self._unmatched = []
 
+        # How many more files can be handed to the pool, see TASKS_PER_PROCESS. Each run makes its own for its processes
+        self._free_slots = None
+
     @property
     def left_to_process(self):
         """Files that are left to process"""
@@ -434,9 +443,10 @@ class ImageMatcher:
         """
         Mark a folder to be skipped going forward, and remove already-indexed files
         that live under it. Pauses briefly if not already paused to keep state sane.
+
+        Files under it that a running scan found, but hasn't handed to the pool yet, are skipped (see _send_files).
+            The few that were handed over already are still hashed, and then dropped (see _add_result).
         """
-        # TODO: This works but the biggest problem with it is that it will not remove any images which are still
-        #   queue'd up for processing in the ThreadPool... I'm not sure how to fix that yet.
         folder = str(Path(folder).expanduser().resolve())
         with self.paused():
             self._removed_paths.add(folder)
@@ -766,15 +776,78 @@ class ImageMatcher:
         #   couldn't be sent back) don't. And like _process_image_callback, this must not raise
         logger.error("%s: %s (input path %s)", type(e).__name__, e, getattr(e, "input_path", "unknown"))
 
-    def _root_stream(self):
-        """This is to yield any paths for processing, then wait until processing is finished for any new paths"""
+    def _on_task_done(self, result):
+        """The pool's callback for a file it hashed: add the result, then make room for another file"""
+        try:
+            self._process_image_callback(result)
+        finally:
+            self._free_slots.release()
+
+    def _on_task_error(self, e):
+        """The pool's callback for a file it couldn't hash: log it, then make room for another file"""
+        try:
+            self._process_image_error_callback(e)
+        finally:
+            self._free_slots.release()
+
+    def _root_stream(self, wait):
+        """
+        This is to yield any paths for processing, then wait until processing is finished for any new paths.
+
+        Args:
+            wait (Callable[[], None]): Waits a little (~50ms), for when there are no new paths.
+
+        Yields:
+            str: The paths to process.
+        """
         # Once finished, images that are still being hashed are dropped rather than counted, so don't wait for them
         while not self.is_finished() and (not self._new_paths.empty() or self.left_to_process):
             if self._new_paths.empty():
-                time.sleep(0.05)
+                wait()
                 continue
 
             yield self._new_paths.get_nowait()
+
+    def _send_files(self, tp, unsent: deque, *, wait: float = 0):
+        """
+        Hand files the walk found to the pool to hash, while it has room for them (see TASKS_PER_PROCESS).
+
+        Files in a folder that was removed from processing since they were found are skipped (see remove_path).
+
+        Args:
+            tp (multiprocessing.pool.Pool): The pool.
+            unsent (deque[str]): The paths of the files waiting to be handed over, oldest first.
+            wait (float): How long to wait for room, in seconds, if there isn't any. With no files waiting,
+                this just waits that long.
+        """
+        if not unsent:
+            time.sleep(wait)
+            return
+
+        while unsent and not self.is_finished():
+            # Only wait for room for the first file
+            if not (self._free_slots.acquire(timeout=wait) if wait else self._free_slots.acquire(blocking=False)):
+                return
+            wait = 0
+
+            path = unsent.popleft()
+            if self._is_removed(path):
+                self._free_slots.release()
+                with self._lock:  # The result thread changes this count too
+                    self.found_images -= 1
+                continue
+
+            tp.apply_async(
+                _process_image,
+                args=(path, ),
+                kwds={
+                    'supported_extensions': self.extensions,
+                    'exact_match': self.exact_match,
+                    'draft': self.radius >= DRAFT_RADIUS,
+                },
+                callback=self._on_task_done,
+                error_callback=self._on_task_error,
+            )
 
     def run(self, paths: list[str | Path]):
         """Do the work of matching!"""
@@ -784,9 +857,13 @@ class ImageMatcher:
         for path in paths:
             self.add_path(path)
 
-        with Pool(self.processes,
+        processes = self.processes or os.cpu_count() or 1
+        self._free_slots = Semaphore(processes * TASKS_PER_PROCESS)
+        unsent = deque()  # The files found that are waiting to be handed to the pool, see _send_files
+        with Pool(processes,
                   initializer=_init_worker, initargs=(ImageFile.LOAD_TRUNCATED_IMAGES, )) as tp:
-            for path in self._root_stream():
+            # Waiting for results is when the files that were waiting for room in the pool are handed over
+            for path in self._root_stream(partial(self._send_files, tp, unsent, wait=0.05)):
                 path = Path(path)
                 if not path.is_dir():
                     logger.warning('A path was entered that was not a directory : %s', path)
@@ -816,9 +893,6 @@ class ImageMatcher:
                         if f.suffix.lower() not in self.extensions:
                             continue
 
-                        if self._is_removed(f):
-                            continue
-
                         if str(f) in self._ignored_files:
                             continue
 
@@ -830,17 +904,9 @@ class ImageMatcher:
 
                         with self._lock:  # The result thread changes this count too
                             self.found_images += 1
-                        tp.apply_async(
-                            _process_image,
-                            args=(f, ),
-                            kwds={
-                                'supported_extensions': self.extensions,
-                                'exact_match': self.exact_match,
-                                'draft': self.radius >= DRAFT_RADIUS,
-                            },
-                            callback=self._process_image_callback,
-                            error_callback=self._process_image_error_callback,
-                        )
+                        # If its folder is removed from processing, it's skipped when it's handed over
+                        unsent.append(str(f))
+                        self._send_files(tp, unsent)
 
             tp.close()
 
