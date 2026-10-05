@@ -1112,7 +1112,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # TODO: If the path has already been loaded for processing in the processor, then this won't do much
         for selected_index in self.selected_file_path_display.selectedIndexes():
             row = selected_index.row()
-            if row == self.selected_file_path_display.count():
+            if row == self.selected_file_path_display.count() - 1:
                 continue
 
             item = self.selected_file_path_display.takeItem(row)
