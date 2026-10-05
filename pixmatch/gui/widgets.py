@@ -873,24 +873,14 @@ class ThumbnailTile(QtWidgets.QFrame):
         path: Image path (opaque identifier for the caller).
         stateChanged(path: str, state: SelectionValue): Emitted on state updates.
         hovered(path: str): Emitted on cursor hovering over thumbnail tile.
+        menuAction(action: str, path: ZipPath): Emitted when a context menu entry that acts on more than this tile, or
+            needs more than this tile to act, is chosen. `action` names it, like "delete_group" or "move".
+            MainWindow.on_tile_menu_action handles these.
     """
     # TODO: Convert state outline to overlay icon
     stateChanged = QtCore.Signal(ZipPath, SelectionValue)
     hovered = QtCore.Signal(ZipPath)
-
-    # These need signals because they need to be handled by higher ups.
-    move = QtCore.Signal(ZipPath)
-    deleteGroup = QtCore.Signal(ZipPath)
-    deleteColumn = QtCore.Signal(ZipPath)
-    deleteFolder = QtCore.Signal(ZipPath)
-    ignoreGroup = QtCore.Signal(ZipPath)
-    ignoreColumn = QtCore.Signal(ZipPath)
-    ignoreFolder = QtCore.Signal(ZipPath)
-    ignoreZip = QtCore.Signal(ZipPath)
-    unmarkGroup = QtCore.Signal(ZipPath)
-    unmarkColumn = QtCore.Signal(ZipPath)
-    unmarkFolder = QtCore.Signal(ZipPath)
-    unmarkZip = QtCore.Signal(ZipPath)
+    menuAction = QtCore.Signal(str, ZipPath)
 
     def __init__(self, path: ZipPath, pixmap: QtGui.QPixmap | None = None, thumb_size: int = 32, parent=None):
         super().__init__(parent, frameShape=QtWidgets.QFrame.Shape.Box, lineWidth=2)
@@ -919,107 +909,42 @@ class ThumbnailTile(QtWidgets.QFrame):
             _overlay_icon.setFixedSize(thumb_size, thumb_size)  # small badge; adjust later if you want
             _overlay_icon.setPixmap(get_overlay_icon(thumb_size / 1.5, thumb_size / 1.5))
 
+        # Files in zips are read-only, so they can't be deleted or moved, and the zip entries are only for them
+        in_zip = self._path.is_zip
         self.context_menu = QtWidgets.QMenu(self)
-
-        act_delete = self.context_menu.addAction("Delete")
-        act_delete_group = self.context_menu.addAction("Delete group")
-        act_delete_column = self.context_menu.addAction("Delete column")
-        act_delete_folder = self.context_menu.addAction("Delete folder")
+        self._add_state_entry("Delete", SelectionValues.DELETE, enabled=not in_zip)
+        self._add_action_entry("Delete group", "delete_group", enabled=not in_zip)
+        self._add_action_entry("Delete column", "delete_column", enabled=not in_zip)
+        self._add_action_entry("Delete folder", "delete_folder", enabled=not in_zip)
         self.context_menu.addSeparator()
-        act_ignore = self.context_menu.addAction("Ignore")
-        act_ignore_group = self.context_menu.addAction("Ignore group")
-        act_ignore_column = self.context_menu.addAction("Ignore column")
-        act_ignore_folder = self.context_menu.addAction("Ignore folder")
-        act_ignore_zip = self.context_menu.addAction("Ignore zip")
+        self._add_state_entry("Ignore", SelectionValues.IGNORE)
+        self._add_action_entry("Ignore group", "ignore_group")
+        self._add_action_entry("Ignore column", "ignore_column")
+        self._add_action_entry("Ignore folder", "ignore_folder")
+        self._add_action_entry("Ignore zip", "ignore_zip", enabled=in_zip)
         self.context_menu.addSeparator()
-        act_move = self.context_menu.addAction("Move this file")
-        act_symlink = self.context_menu.addAction("Symlink this file")
+        self._add_action_entry("Move this file", "move", enabled=not in_zip)
+        self.context_menu.addAction("Symlink this file").setEnabled(False)  # TODO:
         self.context_menu.addSeparator()
-        act_unmark = self.context_menu.addAction("Un-select")
-        act_unmark_group = self.context_menu.addAction("Un-select group")
-        act_unmark_column = self.context_menu.addAction("Un-select column")
-        act_unmark_folder = self.context_menu.addAction("Un-select folder")
-        act_unmark_zip = self.context_menu.addAction("Un-select zip")
-
-        # Enablement: only these three should work right now
-        # If the path is from a zip (locked), disable Delete here as well.
-        act_delete.setEnabled(not self._path.is_zip)
-        act_delete_group.setEnabled(not self._path.is_zip)
-        act_delete_column.setEnabled(not self._path.is_zip)
-        act_delete_folder.setEnabled(not self._path.is_zip)
-        act_move.setEnabled(not self._path.is_zip)
-        act_ignore_zip.setEnabled(self._path.is_zip)
-        act_unmark_zip.setEnabled(self._path.is_zip)
-
-        act_move.triggered.connect(self.on_move)
-        act_delete_group.triggered.connect(self.on_delete_group)
-        act_delete_column.triggered.connect(self.on_delete_column)
-        act_delete_folder.triggered.connect(self.on_delete_folder)
-        act_ignore_group.triggered.connect(self.on_ignore_group)
-        act_ignore_column.triggered.connect(self.on_ignore_column)
-        act_ignore_folder.triggered.connect(self.on_ignore_folder)
-        act_ignore_zip.triggered.connect(self.on_ignore_zip)
-        act_unmark_group.triggered.connect(self.on_unmark_group)
-        act_unmark_column.triggered.connect(self.on_unmark_column)
-        act_unmark_folder.triggered.connect(self.on_unmark_folder)
-        act_unmark_zip.triggered.connect(self.on_unmark_zip)
-
-        act_symlink.setEnabled(False)  # TODO:
-
-        # Wire up state changes
-        act_delete.triggered.connect(lambda _=False: self.change_state_clicked(SelectionValues.DELETE))
-        act_ignore.triggered.connect(lambda _=False: self.change_state_clicked(SelectionValues.IGNORE))
-        act_unmark.triggered.connect(lambda _=False: self.change_state_clicked(SelectionValues.KEEP))
+        self._add_state_entry("Un-select", SelectionValues.KEEP)
+        self._add_action_entry("Un-select group", "unmark_group")
+        self._add_action_entry("Un-select column", "unmark_column")
+        self._add_action_entry("Un-select folder", "unmark_folder")
+        self._add_action_entry("Un-select zip", "unmark_zip", enabled=in_zip)
 
         self._apply_state_style()
 
-    def on_delete_group(self):
-        """Delete group button pressed, so emit"""
-        self.deleteGroup.emit(self._path)
+    def _add_state_entry(self, text: str, state: SelectionValue, *, enabled: bool = True):
+        """Add a context menu entry that sets this tile's state"""
+        entry = self.context_menu.addAction(text)
+        entry.setEnabled(enabled)
+        entry.triggered.connect(lambda _=False: self.change_state_clicked(state))
 
-    def on_delete_column(self):
-        """Delete column button pressed, so emit"""
-        self.deleteColumn.emit(self._path)
-
-    def on_delete_folder(self):
-        """Delete folder button pressed, so emit"""
-        self.deleteFolder.emit(self._path)
-
-    def on_ignore_group(self):
-        """Ignore group button pressed, so emit"""
-        self.ignoreGroup.emit(self._path)
-
-    def on_ignore_column(self):
-        """Ignore column button pressed, so emit"""
-        self.ignoreColumn.emit(self._path)
-
-    def on_ignore_folder(self):
-        """Ignore folder button pressed, so emit"""
-        self.ignoreFolder.emit(self._path)
-
-    def on_ignore_zip(self):
-        """Ignore zip button pressed, so emit"""
-        self.ignoreZip.emit(self._path)
-
-    def on_unmark_group(self):
-        """Unmark group button pressed, so emit"""
-        self.unmarkGroup.emit(self._path)
-
-    def on_unmark_column(self):
-        """Unmark column button pressed, so emit"""
-        self.unmarkColumn.emit(self._path)
-
-    def on_unmark_folder(self):
-        """Unmark folder button pressed, so emit"""
-        self.unmarkFolder.emit(self._path)
-
-    def on_unmark_zip(self):
-        """Unmark zip button pressed, so emit"""
-        self.unmarkZip.emit(self._path)
-
-    def on_move(self):
-        """Move button pressed, so emit"""
-        self.move.emit(self._path)
+    def _add_action_entry(self, text: str, action: str, *, enabled: bool = True):
+        """Add a context menu entry that's handled further up: it emits menuAction with `action`"""
+        entry = self.context_menu.addAction(text)
+        entry.setEnabled(enabled)
+        entry.triggered.connect(lambda _=False: self.menuAction.emit(action, self._path))
 
     def set_pixmap(self, pixmap: QtGui.QPixmap):
         """Show the thumbnail image (a tile can be made before its thumbnail has loaded)"""
@@ -1122,22 +1047,11 @@ class DuplicateGroupRow(QtWidgets.QWidget):
     Signals:
         tileStateChanged(path: ZipPath, state: SelectionValue)
         tileHovered(path: ZipPath)
+        tileMenuAction(action: str, path: ZipPath): See ThumbnailTile.menuAction
     """
     tileStateChanged = QtCore.Signal(ZipPath, SelectionValue)
     tileHovered = QtCore.Signal(ZipPath)
-
-    tileMove = QtCore.Signal(ZipPath)
-    tileDeleteGroup = QtCore.Signal(ZipPath)
-    tileDeleteColumn = QtCore.Signal(int)
-    tileDeleteFolder = QtCore.Signal(ZipPath)
-    tileIgnoreGroup = QtCore.Signal(ZipPath)
-    tileIgnoreColumn = QtCore.Signal(int)
-    tileIgnoreFolder = QtCore.Signal(ZipPath)
-    tileIgnoreZip = QtCore.Signal(ZipPath)
-    tileUnmarkGroup = QtCore.Signal(ZipPath)
-    tileUnmarkColumn = QtCore.Signal(int)
-    tileUnmarkFolder = QtCore.Signal(ZipPath)
-    tileUnmarkZip = QtCore.Signal(ZipPath)
+    tileMenuAction = QtCore.Signal(str, ZipPath)
 
     def __init__(self, images: Sequence[ZipPath], thumb_size: int = 32, parent=None, *, thumbnails: ThumbnailLoader):
         super().__init__(parent)
@@ -1169,18 +1083,7 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         tile = ThumbnailTile(path=path, pixmap=pixmap, thumb_size=self._thumb_size)
         tile.stateChanged.connect(self.tileStateChanged)
         tile.hovered.connect(self.tileHovered)
-        tile.move.connect(self.tileMove)
-        tile.deleteGroup.connect(self.tileDeleteGroup)
-        tile.deleteColumn.connect(self.on_mark_delete_column)
-        tile.deleteFolder.connect(self.tileDeleteFolder)
-        tile.ignoreGroup.connect(self.tileIgnoreGroup)
-        tile.ignoreColumn.connect(self.on_mark_ignore_column)
-        tile.ignoreFolder.connect(self.tileIgnoreFolder)
-        tile.ignoreZip.connect(self.tileIgnoreZip)
-        tile.unmarkGroup.connect(self.tileUnmarkGroup)
-        tile.unmarkColumn.connect(self.on_unmark_column)
-        tile.unmarkFolder.connect(self.tileUnmarkFolder)
-        tile.unmarkZip.connect(self.tileUnmarkZip)
+        tile.menuAction.connect(self.tileMenuAction)
         self._tiles.append(tile)
         self.layout.insertWidget(len(self._tiles) - 1, tile)
 
@@ -1192,33 +1095,6 @@ class DuplicateGroupRow(QtWidgets.QWidget):
         for tile in self._tiles:
             if tile.path == path:
                 tile.set_pixmap(pixmap)
-
-    def on_mark_delete_column(self, target_path: ZipPath):
-        """Mark delete column has been clicked, convert from a path to an integer"""
-        for tile_i, tile in enumerate(self._tiles):
-            if tile.path == target_path:
-                self.tileDeleteColumn.emit(tile_i)
-                return
-
-        raise ValueError("This should never happen!")
-
-    def on_mark_ignore_column(self, target_path: ZipPath):
-        """Mark ignore column has been clicked, convert from a path to an integer"""
-        for tile_i, tile in enumerate(self._tiles):
-            if tile.path == target_path:
-                self.tileIgnoreColumn.emit(tile_i)
-                return
-
-        raise ValueError("This should never happen!")
-
-    def on_unmark_column(self, target_path: ZipPath):
-        """Unmark column has been clicked, convert from a path to an integer"""
-        for tile_i, tile in enumerate(self._tiles):
-            if tile.path == target_path:
-                self.tileUnmarkColumn.emit(tile_i)
-                return
-
-        raise ValueError("This should never happen!")
 
 
 class ClickableLabel(QtWidgets.QLabel):
@@ -1245,20 +1121,8 @@ class DuplicateGroupList(QtWidgets.QWidget):
 
     groupTileStateChanged = QtCore.Signal(ZipPath, SelectionValue)  # path, state
     groupTileHovered = QtCore.Signal(ZipPath)
+    groupTileMenuAction = QtCore.Signal(str, ZipPath)  # action, path. See ThumbnailTile.menuAction
     pageIndicatorClicked = QtCore.Signal()
-
-    groupTileMove = QtCore.Signal(ZipPath)
-    groupTileDeleteGroup = QtCore.Signal(ZipPath)
-    groupTileDeleteColumn = QtCore.Signal(int)
-    groupTileDeleteFolder = QtCore.Signal(ZipPath)
-    groupTileIgnoreGroup = QtCore.Signal(ZipPath)
-    groupTileIgnoreColumn = QtCore.Signal(int)
-    groupTileIgnoreFolder = QtCore.Signal(ZipPath)
-    groupTileIgnoreZip = QtCore.Signal(ZipPath)
-    groupTileUnmarkGroup = QtCore.Signal(ZipPath)
-    groupTileUnmarkColumn = QtCore.Signal(int)
-    groupTileUnmarkFolder = QtCore.Signal(ZipPath)
-    groupTileUnmarkZip = QtCore.Signal(ZipPath)
 
     def __init__(self, parent=None, *, max_rows: int = 25, thumb_size: int = 64, **kwargs):
         super().__init__(parent, **kwargs)
@@ -1335,18 +1199,7 @@ class DuplicateGroupList(QtWidgets.QWidget):
         row = DuplicateGroupRow(group, thumb_size=self._thumb_size, thumbnails=self._thumbnails)
         row.tileStateChanged.connect(self.groupTileStateChanged)
         row.tileHovered.connect(self.groupTileHovered)
-        row.tileMove.connect(self.groupTileMove)
-        row.tileDeleteGroup.connect(self.groupTileDeleteGroup)
-        row.tileDeleteColumn.connect(self.groupTileDeleteColumn)
-        row.tileDeleteFolder.connect(self.groupTileDeleteFolder)
-        row.tileIgnoreGroup.connect(self.groupTileIgnoreGroup)
-        row.tileIgnoreColumn.connect(self.groupTileIgnoreColumn)
-        row.tileIgnoreFolder.connect(self.groupTileIgnoreFolder)
-        row.tileIgnoreZip.connect(self.groupTileIgnoreZip)
-        row.tileUnmarkGroup.connect(self.groupTileUnmarkGroup)
-        row.tileUnmarkColumn.connect(self.groupTileUnmarkColumn)
-        row.tileUnmarkFolder.connect(self.groupTileUnmarkFolder)
-        row.tileUnmarkZip.connect(self.groupTileUnmarkZip)
+        row.tileMenuAction.connect(self.groupTileMenuAction)
         tail_index = self._vbox.count() - 1
         self._vbox.insertWidget(tail_index, row)
         self._rows.append(row)
@@ -1389,6 +1242,20 @@ class DuplicateGroupList(QtWidgets.QWidget):
                 return [paths[j] for j in nearest if j != i]
 
         return []
+
+    def column_of(self, path: ZipPath) -> int | None:
+        """
+        Which column `path` is in: its place in its row (group), from 0.
+
+        Returns:
+            int | None: The column, or None if `path` isn't on this page.
+        """
+        for row in self._rows:
+            for column, tile in enumerate(row.tiles()):
+                if tile.path == path:
+                    return column
+
+        return None
 # endregion
 
 

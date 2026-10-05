@@ -520,18 +520,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duplicate_group_list = DuplicateGroupList(sizePolicy=MAX_SIZE_POLICY)
         self.duplicate_group_list.groupTileStateChanged.connect(self.on_match_state_changed)
         self.duplicate_group_list.groupTileHovered.connect(self.on_tile_hover)
-        self.duplicate_group_list.groupTileMove.connect(self.mark_move)
-        self.duplicate_group_list.groupTileDeleteGroup.connect(self.mark_delete_group)
-        self.duplicate_group_list.groupTileDeleteColumn.connect(self.mark_delete_column)
-        self.duplicate_group_list.groupTileDeleteFolder.connect(self.mark_delete_folder)
-        self.duplicate_group_list.groupTileIgnoreGroup.connect(self.mark_ignore_group)
-        self.duplicate_group_list.groupTileIgnoreColumn.connect(self.mark_ignore_column)
-        self.duplicate_group_list.groupTileIgnoreFolder.connect(self.mark_ignore_folder)
-        self.duplicate_group_list.groupTileIgnoreZip.connect(self.mark_ignore_zip)
-        self.duplicate_group_list.groupTileUnmarkGroup.connect(self.mark_unmark_group)
-        self.duplicate_group_list.groupTileUnmarkColumn.connect(self.mark_unmark_column)
-        self.duplicate_group_list.groupTileUnmarkFolder.connect(self.mark_unmark_folder)
-        self.duplicate_group_list.groupTileUnmarkZip.connect(self.mark_unmark_zip)
+        self.duplicate_group_list.groupTileMenuAction.connect(self.on_tile_menu_action)
         self.duplicate_group_list.page_down.pressed.connect(self.on_page_down)
         self.duplicate_group_list.page_up.pressed.connect(self.on_page_up)
         self.duplicate_group_list.first_page.pressed.connect(self.on_page_first)
@@ -908,27 +897,31 @@ class MainWindow(QtWidgets.QMainWindow):
         """Mark all files in a group as keep"""
         self.mark_group(target_path or self.image_view_area.current_path, SelectionValues.KEEP)
 
-    def mark_column(self, column_i: int, selection: SelectionValues):
-        """Mark all tiles in a column as a particular state"""
+    def mark_column(self, path: ZipPath, selection: SelectionValue):
+        """Mark all tiles on the page in the same column as a file's tile as a particular state"""
+        column_i = self.duplicate_group_list.column_of(path)
+        if column_i is None:
+            return
+
         self.mark_paths(
             (row._tiles[column_i].path for row in self.duplicate_group_list._rows if column_i < len(row)),
             selection,
         )
 
-    # TODO: Make target_column option and get the column of the image view area.
+    # TODO: Make target_path optional and use the image in the view area without one, like the other mark methods.
     #    This would allow me to add these options to the menu bar but honestly...
     #    I'm fine with them just being in the context menu...
-    def mark_ignore_column(self, target_column: int):
+    def mark_ignore_column(self, target_path: ZipPath):
         """Mark all files in a column as ignore"""
-        self.mark_column(target_column, SelectionValues.IGNORE)
+        self.mark_column(target_path, SelectionValues.IGNORE)
 
-    def mark_delete_column(self, target_column: int):
+    def mark_delete_column(self, target_path: ZipPath):
         """Mark all files in a column as delete"""
-        self.mark_column(target_column, SelectionValues.DELETE)
+        self.mark_column(target_path, SelectionValues.DELETE)
 
-    def mark_unmark_column(self, target_column: int):
+    def mark_unmark_column(self, target_path: ZipPath):
         """Mark all files in a column as delete"""
-        self.mark_column(target_column, SelectionValues.KEEP)
+        self.mark_column(target_path, SelectionValues.KEEP)
 
     def mark_zip(self, target_path: ZipPath, state: SelectionValue):
         """Mark all files in a zip"""
@@ -1025,6 +1018,24 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_match_state_changed(self, path: ZipPath, state):
         """A tile has been clicked and the match state was changed"""
         self.set_file_state(path, state)
+
+    def on_tile_menu_action(self, action: str, path: ZipPath):
+        """An entry in a tile's context menu that's handled here was chosen, see ThumbnailTile.menuAction"""
+        handlers = {
+            "move": self.mark_move,
+            "delete_group": self.mark_delete_group,
+            "delete_column": self.mark_delete_column,
+            "delete_folder": self.mark_delete_folder,
+            "ignore_group": self.mark_ignore_group,
+            "ignore_column": self.mark_ignore_column,
+            "ignore_folder": self.mark_ignore_folder,
+            "ignore_zip": self.mark_ignore_zip,
+            "unmark_group": self.mark_unmark_group,
+            "unmark_column": self.mark_unmark_column,
+            "unmark_folder": self.mark_unmark_folder,
+            "unmark_zip": self.mark_unmark_zip,
+        }
+        handlers[action](path)
 
     def update_selection_states(self, selections: dict | None = None):
         """Update the states of the selection in the duplicate list view"""
