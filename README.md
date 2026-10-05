@@ -12,7 +12,7 @@ PixMatch scans folders (and ZIP archives) for visually similar images, groups ma
     —never deleted—so you can safely compare against archived libraries.
 
 
-Supported extensions: `.jpg`, `.jpeg`, `.png`, `.webp`, `.tif`, `.tiff`, `.bmp`, `.gif`, `.zip`.
+Supported extensions: `.jpg`, `.jpeg`, `.jfif`, `.png`, `.webp`, `.tif`, `.tiff`, `.bmp`, `.gif`, `.zip`.
 
 
 ## Install

@@ -376,7 +376,7 @@ class ImageMatcher:
         processes (int): The number of processes to use. Defaults to None, for one per CPU.
         extensions (set): The extensions to process. Optional.
     """
-    SUPPORTED_EXTS: ClassVar = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
+    SUPPORTED_EXTS: ClassVar = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
 
     def __init__(self, strength: int = 5, processes: int | None = None, extensions: set | None = None,
                  *, exact_match: bool = False):
