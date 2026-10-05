@@ -36,14 +36,6 @@ if __name__ == "__main__":
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('RHeard.PixMatch')
 
     app = QtWidgets.QApplication([])
-    # Basic stylesheet for subtle polish without complexity.
-    app.setStyleSheet(
-        """
-        QToolBar { spacing: 8px; }
-        QLabel#GroupTitle { padding: 4px 0; }
-        QFrame#ImageTile { border: 1px solid #444; border-radius: 6px; padding: 6px; }
-        """,
-    )
     w = MainWindow(args.folders)
     w.show()
     app.exec()

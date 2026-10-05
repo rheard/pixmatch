@@ -1025,12 +1025,6 @@ class ThumbnailTile(QtWidgets.QFrame):
                 border-radius: 6px;
                 background: #202020;
             }}
-            QLabel#StateBadge {{
-                color: black;
-                background: rgba({color.red()}, {color.green()}, {color.blue()}, 220);
-                border-radius: 6px;
-                font-weight: 600;
-            }}
             """,
         )
 
