@@ -13,7 +13,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from queue import Queue
 from threading import Event, RLock, Semaphore
-from typing import ClassVar
+from typing import Callable, ClassVar, Iterable, Sequence
 from zipfile import BadZipFile, ZipFile
 
 import numpy as np
@@ -241,6 +241,8 @@ def _process_image(
 @dataclass
 class ImageMatch:
     """A match data structure containing the matches and where this match lies in the match list"""
+    # Its place in ImageMatcher.matches, or None if it isn't a match: it has no duplicates (yet), or a group filter
+    #   drops it (see ImageMatcher.set_group_filters)
     match_i: int | None = field(default=None)
     matches: list[ZipPath] = field(default_factory=list)
 
@@ -279,6 +281,13 @@ class Finished:
 
 
 MatcherEvent = NewGroup | NewMatch | Finished
+# endregion
+
+
+# region Group filters
+# A group filter is given the images in a group of duplicates, and returns whether to keep the group as a match (True)
+#   or drop it from ImageMatcher.matches (False). See ImageMatcher.set_group_filters
+GroupFilter = Callable[[Sequence[ZipPath]], bool]
 # endregion
 
 
@@ -375,11 +384,13 @@ class ImageMatcher:
             If True, strength must be 10.
         processes (int): The number of processes to use. Defaults to None, for one per CPU.
         extensions (set): The extensions to process. Optional.
+        group_filters (Iterable[GroupFilter]): Only the groups of duplicates that all of these keep are matches (are in
+            `matches`), see set_group_filters. Defaults to none, so every group of duplicates is a match.
     """
     SUPPORTED_EXTS: ClassVar = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".zip"}
 
     def __init__(self, strength: int = 5, processes: int | None = None, extensions: set | None = None,
-                 *, exact_match: bool = False):
+                 *, exact_match: bool = False, group_filters: Iterable[GroupFilter] = ()):
         if not (0 <= strength <= 10):
             raise ValueError("Strength must be between 0 and 10!")
 
@@ -389,10 +400,11 @@ class ImageMatcher:
         self.radius = STRENGTH_RADIUS[strength]
         self.exact_match = exact_match
         self.processes = processes
+        self._group_filters = tuple(group_filters)  # See set_group_filters
 
         self.found_images = 0
         self.processed_images = 0
-        self.duplicate_images = 0
+        self.duplicate_images = 0  # How many images the groups in `matches` have
         self.matches = []
 
         # Both ends of these queues are in this process (the pool runs its callbacks on a thread here, not in the
@@ -542,27 +554,20 @@ class ImageMatcher:
         logger.info('Removing %s from %s', path, self.__class__.__name__)
         with self.paused():
             hash_ = self._reverse_hashes.pop(path)
-            self._hashes[hash_].matches.remove(path)
-            if len(self._hashes[hash_].matches) == 1:
-                match_i = self._hashes[hash_].match_i
-                logger.debug('Unmatching match group %s', match_i)
-                self._hashes[hash_].match_i = None
+            group = self._hashes[hash_]
+            group.matches.remove(path)
+            if group.match_i is not None:
+                self.duplicate_images -= 1
 
-                # Groups aren't renumbered until the paused() block ends, so this group's match_i is ahead of its place
-                #   in `matches` by how many groups before it were already taken out in this block
-                del self.matches[match_i - bisect_left(self._unmatched, match_i)]
-                insort(self._unmatched, match_i)
-                self.duplicate_images -= 2
-
-            elif not self._hashes[hash_].matches:
+            if not group.matches:
                 logger.debug('Removing empty match group')
                 del self._hashes[hash_]
                 if self._index is not None:
                     self._index.remove(hash_)
 
             else:
-                logger.debug('Simple removal performed')
-                self.duplicate_images -= 1
+                # With one image left it isn't a match anymore, and the group filters may decide differently now
+                self._update_match(group)
 
             self.processed_images -= 1
             self.found_images -= 1
@@ -594,6 +599,48 @@ class ImageMatcher:
             # Replace it in place, so the file keeps its position (column) in its group
             matches = self._hashes[hash_].matches
             matches[matches.index(old_path)] = new_path
+            # Where the file is now can change what the group filters decide about its group
+            self._update_match(self._hashes[hash_])
+
+    def set_group_filters(self, group_filters: Iterable[GroupFilter]):
+        """
+        Choose which groups of duplicates are matches (are in `matches`): only the ones that all of these keep.
+
+        A group that a filter drops still gets its images, but it isn't in `matches`, it has no match_i, its images
+            aren't counted in duplicate_images, and no events are sent about it. If an image added to it makes the
+            filters keep it, it becomes a match at the end of `matches` with a NewGroup event, like a new group.
+        A match is checked again when its images are removed or moved, but not as images are added to it: taking it out
+            of `matches` mid-scan would renumber the groups after it while events about them are on their way.
+            So a filter shouldn't drop a group because an image was added to it.
+
+        Changing the filters sends no events, so read `matches` again afterwards. The groups that stay matches keep
+            their order, and the ones that become matches go after them, in the order their first images were found.
+
+        Args:
+            group_filters (Iterable[GroupFilter]): The filters. Each is given a group's images (which it mustn't
+                change) and returns whether to keep the group. They're called as images are added, so make them quick.
+        """
+        with self.paused():
+            self._group_filters = tuple(group_filters)
+
+            # Every group is checked, so `matches` is made again in one go. Taking the groups out one at a time (like
+            #   remove does) moves every group after each one: 0.7s to take out 50k of 100k groups
+            kept = []
+            for group in self.matches:
+                if self._counts_as_match(group):
+                    kept.append(group)
+                else:
+                    group.match_i = None
+                    self.duplicate_images -= len(group.matches)
+
+            # The groups the old filters dropped that these keep (a dict keeps the order its keys were added in)
+            added = [group for group in self._hashes.values() if group.match_i is None and self._counts_as_match(group)]
+            self.duplicate_images += sum(len(group.matches) for group in added)
+            self.matches[:] = kept + added
+
+            # Every group is renumbered here, so the paused() block this is in (if any) has nothing left to renumber
+            self._unmatched.clear()
+            self.refresh_match_indexes()
 
     def refresh_match_indexes(self, start=0):
         """Update the match_i value for all the matches passed a certain point"""
@@ -606,6 +653,38 @@ class ImageMatcher:
             # The groups before the first one taken out kept their places, so their numbers are still right
             self.refresh_match_indexes(self._unmatched[0])
             self._unmatched.clear()
+
+    def _counts_as_match(self, group: ImageMatch) -> bool:
+        """Should this group be a match (be in `matches`)? It needs duplicates, and every group filter has to keep it"""
+        return len(group.matches) >= 2 and all(keep(group.matches) for keep in self._group_filters)
+
+    def _match(self, group: ImageMatch):
+        """Make a group a match, at the end of `matches`"""
+        # Numbered like the groups before it: in a paused() block, that still counts the groups taken out of `matches`
+        #   until the block ends and renumbers them (see _unmatch)
+        group.match_i = len(self.matches) + len(self._unmatched)
+        self.matches.append(group)
+        self.duplicate_images += len(group.matches)
+
+    def _unmatch(self, group: ImageMatch):
+        """Take a group out of `matches`. Only do this in a paused() block, which renumbers the groups after it"""
+        match_i = group.match_i
+        logger.debug('Unmatching match group %s', match_i)
+        group.match_i = None
+
+        # Groups aren't renumbered until the paused() block ends, so this group's match_i is ahead of its place
+        #   in `matches` by how many groups before it were already taken out in this block
+        del self.matches[match_i - bisect_left(self._unmatched, match_i)]
+        insort(self._unmatched, match_i)
+        self.duplicate_images -= len(group.matches)
+
+    def _update_match(self, group: ImageMatch):
+        """Make a group a match or stop it being one, as _counts_as_match decides, after its images changed"""
+        if self._counts_as_match(group):
+            if group.match_i is None:
+                self._match(group)
+        elif group.match_i is not None:
+            self._unmatch(group)
 
     def _find_group(self, hashes: set) -> int | str | None:
         """
@@ -746,25 +825,22 @@ class ImageMatcher:
             return True
 
         # We have found a match!
+        group = self._hashes[hash_]
         self._reverse_hashes[path] = hash_
-        self._hashes[hash_].matches.append(path)
+        group.matches.append(path)
 
-        if self._hashes[hash_].match_i is None and len(self._hashes[hash_].matches) >= 2:
-            # This is a brand new match group!
-            self._hashes[hash_].match_i = len(self.matches)
-            self.matches.append(self._hashes[hash_])
-            self.duplicate_images += 2
-            self.events_sent += 1
-            self.events.put(NewGroup(self._hashes[hash_].snapshot(), self.events_sent))
-            logger.debug('New match group found: %s', self._hashes[hash_].matches)
-        else:
+        if group.match_i is not None:
             # Just another match for an existing group...
             self.duplicate_images += 1
             self.events_sent += 1
-            self.events.put(NewMatch(self._hashes[hash_].snapshot(), path, self.events_sent))
-            logger.debug('New match found for group #%s: %s',
-                         self._hashes[hash_].match_i,
-                         self._hashes[hash_].matches)
+            self.events.put(NewMatch(group.snapshot(), path, self.events_sent))
+            logger.debug('New match found for group #%s: %s', group.match_i, group.matches)
+        elif self._counts_as_match(group):
+            # This is a brand new match group! (Or one that the group filters dropped until this image was added)
+            self._match(group)
+            self.events_sent += 1
+            self.events.put(NewGroup(group.snapshot(), self.events_sent))
+            logger.debug('New match group found: %s', group.matches)
 
         return True
 
