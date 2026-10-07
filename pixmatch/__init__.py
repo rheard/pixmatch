@@ -288,6 +288,18 @@ MatcherEvent = NewGroup | NewMatch | Finished
 # A group filter is given the images in a group of duplicates, and returns whether to keep the group as a match (True)
 #   or drop it from ImageMatcher.matches (False). See ImageMatcher.set_group_filters
 GroupFilter = Callable[[Sequence[ZipPath]], bool]
+
+
+def has_image_outside_zips(images: Sequence[ZipPath]) -> bool:
+    """
+    A group filter that drops the groups whose images are all in zips.
+
+    Files in zips are read-only, so there's nothing in those groups that can be deleted.
+
+    Returns:
+        bool: Whether any of the images isn't in a zip.
+    """
+    return any(not image.is_zip for image in images)
 # endregion
 
 

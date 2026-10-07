@@ -13,7 +13,7 @@ from PIL import ImageFile
 from PySide6 import QtCore, QtGui, QtWidgets
 from send2trash import send2trash
 
-from pixmatch import Finished, ImageMatcher, NewGroup, NewMatch, ZipPath, _is_under
+from pixmatch import Finished, ImageMatcher, NewGroup, NewMatch, ZipPath, _is_under, has_image_outside_zips
 from pixmatch.gui.utils import MAX_SIZE_POLICY, NO_MARGIN
 from pixmatch.gui.widgets import (
     STATE_ORDER,
@@ -32,6 +32,12 @@ from pixmatch.utils import human_bytes
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 ICON_PATH = Path(__file__).resolve().parent / 'pixmatch.ico'
+
+# The options that hide groups, as they're named in the Options menu, and the group filter each one turns on
+#   (see ImageMatcher.set_group_filters)
+GROUP_FILTER_OPTIONS = {
+    "Hide groups only in zips": has_image_outside_zips,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +287,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # ... = QtGui.QAction("Between folders only", self)
         # ... = QtGui.QAction("Loosen filter automatically", self)
 
+        # Each option that hides groups turns on a group filter, see group_filters
+        self._group_filter_options = []  # (option, its group filter)
+        for text, group_filter in GROUP_FILTER_OPTIONS.items():
+            option = QtGui.QAction(text, self, checkable=True)
+            option.triggered.connect(self.change_group_filters)
+            self._group_filter_options.append((option, group_filter))
+
         option_hidden_folders.triggered.connect(self.change_hidden_folders_state)
         option_recycle.triggered.connect(self.change_recycle_state)
 
@@ -289,6 +302,9 @@ class MainWindow(QtWidgets.QMainWindow):
         options_menu.addAction(option_subfolders)
         options_menu.addSeparator()
         options_menu.addAction(option_rotations)
+        options_menu.addSeparator()
+        for option, _ in self._group_filter_options:
+            options_menu.addAction(option)
         options_menu.addSeparator()
         options_menu.addAction(option_recycle)
         # endregion
@@ -588,6 +604,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.processor = ImageMatcher(
                 strength=self.precision_slider.value(),
                 exact_match=self.hash_match_chkbx.isChecked(),
+                group_filters=self.group_filters(),
             )
 
         elif self.processor.is_paused() and not self.processor.is_finished():
@@ -689,6 +706,21 @@ class MainWindow(QtWidgets.QMainWindow):
     def change_recycle_state(self, checked: bool):  # ruff: ignore[boolean-type-hint-positional-argument]
         """Change the 'Use recycle bin' state"""
         self.recycle = checked
+
+    def group_filters(self) -> list:
+        """The group filters of the options that hide groups (in the Options menu) which are checked"""
+        return [group_filter for option, group_filter in self._group_filter_options if option.isChecked()]
+
+    def change_group_filters(self, *_):
+        """An option that hides groups was checked or unchecked, so show the groups that the options don't hide"""
+        if not self.processor:
+            return  # The scan gets them when it starts
+
+        self.processor.set_group_filters(self.group_filters())
+        # If there are fewer pages now, stay on the last one
+        self.current_page = min(self.current_page, self.total_pages)
+        self.update_group_list()
+        self.update_labels()
 
     def set_duplicate_groups_label(self, duplicate_groups: int):
         """Set the duplicate groups count label"""
@@ -845,8 +877,9 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Set the state of a single file. Every state change should go through here.
 
-        Files are only marked for delete or move while they are in a match group (i.e. they have a duplicate),
-            so bulk actions like "Delete folder" can't reach files that have no duplicate.
+        Files are only marked for delete or move while they are in a match group (i.e. they have a duplicate, and their
+            group isn't hidden), so bulk actions like "Delete folder" can't reach files that have no duplicate,
+            or that are hidden.
         Files in zips are read-only, so they are never marked for delete or move:
             processing them would act on the zip itself, not the file inside it.
         """
