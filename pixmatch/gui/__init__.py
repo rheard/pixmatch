@@ -599,6 +599,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if not e:
             return
 
+        target_paths = self.file_paths_selected()
+        if not target_paths and (not self.processor or self.processor.is_finished()):
+            # This click would start a scan, and there's nothing to scan. It checked Start though, so check Stop again
+            self.stop_btn.setChecked(True)
+            return
+
         if not self.processor:
             # This is the first time running!
             self.processor = ImageMatcher(
@@ -617,8 +623,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         elif self.processor.running():
             raise RuntimeError("Somehow we're trying to run when the processor appears to be running already!")
-
-        target_paths = self.file_paths_selected()
 
         # Each scan makes its own pool of processes when it starts, so this is when a new CPU setting takes effect
         self.processor.processes = self.cpu_slider.value()
