@@ -98,6 +98,12 @@ DRAFT_RADIUS = 4
 #   The files waiting their turn are kept as just their paths instead, which took ~250 bytes per file
 TASKS_PER_PROCESS = 8
 
+# The environment variable for how many threads OpenBLAS uses, the math library in numpy's builds for Windows and Linux.
+#   It starts one per CPU as numpy is imported, and sets memory aside for each: importing numpy took ~390MB with 12 CPUs
+#   (most of it never touched, but all of it counted against what Windows can hand out), and 16MB with this set to 1.
+#   Hashing has no use for those threads: the largest product it takes is of 32x32 arrays. See _one_blas_thread
+BLAS_THREADS_VAR = "OPENBLAS_NUM_THREADS"
+
 # Formats whose extra frames are an animation. Other formats can have more than one frame too, but their first frame is
 #   the image: like a TIFF's other pages, or the preview that many cameras add to their JPEGs (which open as MPO)
 ANIMATION_FORMATS = {"GIF", "PNG", "WEBP"}
@@ -171,6 +177,26 @@ def calculate_hashes(f, *, exact_match=False, draft=False) -> tuple[int | str, s
     variants = (px, np.fliplr(px)) if animated else tuple(phash.orientations(px))
     initial_hash, *extras = (phash.phash(variant) for variant in variants)
     return initial_hash, set(extras)
+
+
+@contextmanager
+def _one_blas_thread():
+    """
+    Have the processes that are started in this block load numpy with a single math thread (see BLAS_THREADS_VAR).
+
+    OpenBLAS reads the variable once, as it's loaded. A process gets its variables from the one that starts it, so the
+        variable is set here for as long as the pool's processes are being started, then put back.
+        numpy is already loaded in this process, so nothing changes for it.
+    """
+    before = os.environ.get(BLAS_THREADS_VAR)
+    os.environ[BLAS_THREADS_VAR] = "1"
+    try:
+        yield
+    finally:
+        if before is None:
+            del os.environ[BLAS_THREADS_VAR]
+        else:
+            os.environ[BLAS_THREADS_VAR] = before
 
 
 def _init_worker(load_truncated_images: bool):  # ruff: ignore[boolean-type-hint-positional-argument]
@@ -948,8 +974,10 @@ class ImageMatcher:
         processes = self.processes or os.cpu_count() or 1
         self._free_slots = Semaphore(processes * TASKS_PER_PROCESS)
         unsent = deque()  # The files found that are waiting to be handed to the pool, see _send_files
-        with Pool(processes,
-                  initializer=_init_worker, initargs=(ImageFile.LOAD_TRUNCATED_IMAGES, )) as tp:
+        with _one_blas_thread():  # The pool starts its processes as it's made
+            pool = Pool(processes,
+                        initializer=_init_worker, initargs=(ImageFile.LOAD_TRUNCATED_IMAGES, ))
+        with pool as tp:
             # Waiting for results is when the files that were waiting for room in the pool are handed over
             for path in self._root_stream(partial(self._send_files, tp, unsent, wait=0.05)):
                 path = Path(path)
