@@ -621,8 +621,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._label_timer.start()
             return
 
-        elif self.processor.running():
-            raise RuntimeError("Somehow we're trying to run when the processor appears to be running already!")
+        elif not self.processor.is_finished():
+            # Already running. Start stays checked when it's clicked again, but the click still gets here
+            return
 
         # Each scan makes its own pool of processes when it starts, so this is when a new CPU setting takes effect
         self.processor.processes = self.cpu_slider.value()
