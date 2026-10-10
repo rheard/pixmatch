@@ -454,6 +454,9 @@ class ImageMatcher:
         self._new_paths = Queue()  # Inbound queue for new paths that are added while processing is running
         self._removed_paths = set()  # Paths that have been removed from processing after processing has been started
         self._ignored_files = set()  # Files which have been ignored and should be skipped from processing if re-ran
+        # The folders that the scan in progress has walked, so that each one is only walked once however its paths
+        #   overlap: a folder that was added twice, or along with a folder that it's in. See run
+        self._walked = set()
         self._processed_zips = {}  # Zips that have been successfully processed
         self._hashes = defaultdict(ImageMatch)  # Hash -> Paths
         self._reverse_hashes = {}  # Path -> Hash
@@ -510,6 +513,12 @@ class ImageMatcher:
             to_remove_zips = [p for p in self._processed_zips if _is_under(folder, p)]
             for p in to_remove_zips:
                 self._processed_zips.pop(p)
+
+            # If the folder is added back during this scan, it has to be walked again. These are compared as text:
+            #   both come from resolved paths (see run), and resolving every walked folder again would take a while.
+            #   The walk adds to the set meanwhile, so it's copied to be read through
+            inside = folder if folder.endswith(os.sep) else folder + os.sep
+            self._walked -= {walked for walked in tuple(self._walked) if walked == folder or walked.startswith(inside)}
 
     def _is_removed(self, path: str | Path) -> bool:
         """Is this file or folder in a folder that was removed from processing (see remove_path)?"""
@@ -967,6 +976,7 @@ class ImageMatcher:
         """Do the work of matching!"""
         self._not_paused.set()
         self._finished.clear()
+        self._walked = set()
 
         for path in paths:
             self.add_path(path)
@@ -993,11 +1003,20 @@ class ImageMatcher:
                     if self.is_finished():
                         break
 
+                    if root in self._walked:
+                        # This scan has walked this folder already, and so every folder in it: it was added twice, or
+                        #   a folder that it's in was added too. Walking it again would hash the files of it that
+                        #   aren't loaded yet a second time
+                        dirs.clear()
+                        continue
+
                     dirs.sort()  # This actually works to ensure that os.walk goes in alphabetical order!
-                    root = Path(root)
 
                     if self._is_removed(root):
                         continue
+
+                    self._walked.add(root)
+                    root = Path(root)
 
                     for f in files:
                         self._not_paused.wait()
