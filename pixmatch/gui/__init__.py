@@ -1160,7 +1160,9 @@ class MainWindow(QtWidgets.QMainWindow):
             target_path = info.filePath()
             self.selected_file_path_display.addItem(target_path)
 
-            if self.processor and self.processor.running():
+            # A scan that is in progress is told about the folder, even a paused one (it gets to the folder once it's
+            #   resumed). With no scan in progress, the next one starts with every folder listed
+            if self.processor and not self.processor.is_finished():
                 self.processor.add_path(target_path)
 
     def file_path_out_clicked(self, _):
